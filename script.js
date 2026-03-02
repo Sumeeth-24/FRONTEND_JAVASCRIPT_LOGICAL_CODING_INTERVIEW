@@ -1688,9 +1688,22 @@ async function runWithConcurrency(tasks, limit) {
 
   // 🧑‍🏭 Number of tasks currently running
   let activeCount = 0;
+  
+  /*1️⃣ Fail Fast (Abort everything on first error)
+     First error → reject immediately
+     Remaining tasks should:
+     either be ignored
+     or safely handled so they don’t throw unhandled rejections
+  */
+  //let hasErrored = false; // 🚨 global error flag /* TYPE 1 */
 
   return new Promise((resolve, reject) => {
     function runNext() {
+        
+         /* TYPE 1 */
+        // 🛑 Stop scheduling if error already occurred
+        // if (hasErrored) return;
+      
       /**
        * ✅ Base case:
        * - No tasks left
@@ -1716,10 +1729,22 @@ async function runWithConcurrency(tasks, limit) {
         // ▶️ Execute task
         task()
           .then((result) => {
-            // 🎯 Preserve order
-            results[currentIndex] = result;
+              /* TYPE 1 */
+              // 🎯 Preserve order
+             // results[currentIndex] = result;
+           
+           /* TYPE 2 */
+            results[currentIndex] = { status: "fulfilled", value: result };
           })
-          .catch(reject) // ❌ Fail fast
+          .catch(err => {
+            /* TYPE 1 */
+            // ❌ Fail fast
+            // hasErrored = true;
+            // reject(err);
+            
+            /* TYPE 2 */
+            results[currentIndex] = { status: "rejected", reason: err};
+          })
           .finally(() => {
             // ⬇️ Worker freed
             activeCount--;
@@ -1736,14 +1761,23 @@ async function runWithConcurrency(tasks, limit) {
 }
 
 function createTask(name, delay) {
-  return () =>
-    new Promise((resolve) => {
+  return function () {
+    const value = Math.floor(Math.random() * 10);
+
+    return new Promise((resolve, reject) => {
       console.log(`🚀 START ${name}`);
+
       setTimeout(() => {
-        console.log(`✅ END ${name}`);
-        resolve(name);
+        if (value < 5) {
+          console.log(`❌ FAIL ${name}`);
+          reject(`Error ${name}`);
+        } else {
+          console.log(`✅ END ${name}`);
+          resolve(value * 1000);
+        }
       }, delay);
     });
+  };
 }
 
 const tasks = [
@@ -1753,19 +1787,57 @@ const tasks = [
   createTask("Task 4", 500),
 ];
 
+/* TYPE 1: FAIL FAST */
+// runWithConcurrency(tasks, 2)
+//   .then((results) => {
+//     console.log("🎯 FINAL RESULTS:", results);
+//   })
+//   .catch((err) => {
+//     console.error("❌ Execution stopped due to error:", err);
+//   });
+
+/* TYPE 2: Collect All Results (allSettled style) */
 runWithConcurrency(tasks, 2).then((results) => {
   console.log("🎯 FINAL RESULTS:", results);
+
+  results.forEach((res, index) => {
+    if (res.status === "fulfilled") {
+      console.log(`✅ Task ${index} succeeded with`, res.value);
+    } else {
+      console.error(`❌ Task ${index} failed with`, res.reason);
+    }
+  });
 });
+
+/* FAIL FAST TYPE 1 */
+
+// 🚀 START Task 1
+// 🚀 START Task 2
+// ❌ FAIL Task 2
+// ERROR!
+// ❌ Execution stopped due to error: Error Task 2
+// ✅ END Task 1
+
+/* COLLECT ALL RESULT TYPE 2 */
 
 // 🚀 START Task 1
 // 🚀 START Task 2
 // ✅ END Task 2
 // 🚀 START Task 3
-// ✅ END Task 1
+// ❌ FAIL Task 1
 // 🚀 START Task 4
 // ✅ END Task 3
-// ✅ END Task 4
-// 🎯 FINAL RESULTS: [ 'Task 1', 'Task 2', 'Task 3', 'Task 4' ]
+// ❌ FAIL Task 4
+// 🎯 FINAL RESULTS: [
+//   { status: 'rejected', reason: 'Error Task 1' },
+//   { status: 'fulfilled', value: 9000 },
+//   { status: 'fulfilled', value: 5000 },
+//   { status: 'rejected', reason: 'Error Task 4' }
+// ]
+// ❌ Task 0 failed with Error Task 1
+// ✅ Task 1 succeeded with 9000
+// ✅ Task 2 succeeded with 5000
+// ❌ Task 3 failed with Error Task 4
 
 
 // --------------------------------------------------------------
@@ -1989,3 +2061,1097 @@ console.log(maskify("DevTools Tech"));
 console.log(maskify("Sk#ip#p$5k4y"));
 // "S#k#ip#p$#k4y"
 
+
+// --------------------------------------------------------------
+// 21. MAP LIMIT 
+// -------------------------------------------------------------
+
+//mapLimit is just a value-to-task adapter on top of a concurrency-controlled executor.
+
+async function runWithConcurrency(tasks, limit) {
+  const results = new Array(tasks.length);
+  let nextTaskIndex = 0;
+  let activeCount = 0;
+
+  return new Promise((resolve) => {
+    function runNext() {
+      // ✅ All done
+      if (nextTaskIndex === tasks.length && activeCount === 0) {
+        resolve(results);
+        return;
+      }
+
+      while (activeCount < limit && nextTaskIndex < tasks.length) {
+        const currentIndex = nextTaskIndex;
+        const task = tasks[currentIndex];
+
+        nextTaskIndex++;
+        activeCount++;
+
+        task()
+          .then((value) => {
+            results[currentIndex] = { status: "fulfilled", value };
+          })
+          .catch((err) => {
+            results[currentIndex] = { status: "rejected", error: err };
+          })
+          .finally(() => {
+            activeCount--;
+            runNext(); // 🔁 start next waiting task
+          });
+      }
+    }
+
+    runNext();
+  });
+}
+
+
+
+function mapLimit(inputs, limit, mapper, done) {
+  /**
+   * STEP 1️⃣
+   * Convert each input value into a function
+   * WHY?
+   * runWithConcurrency expects: () => Promise
+   */
+  const tasks = inputs.map((item) => {
+    return () => mapper(item);
+  });
+
+  /**
+   * STEP 2️⃣
+   * Delegate concurrency handling to runWithConcurrency
+   */
+  runWithConcurrency(tasks, limit)
+    .then((results) => {
+      // STEP 3️⃣ success callback
+      done(null, results);
+    })
+    .catch((err) => {
+      // STEP 4️⃣ error callback
+      done(err);
+    });
+}
+
+
+
+function mapper(x) {
+  return new Promise((resolve, reject) => {
+    console.log(`🚀 START ${x}`);
+    setTimeout(() => {
+      if (x === 3) {
+        reject(`Error at ${x}`);
+      } else {
+        console.log(`✅ END ${x}`);
+        resolve(x * 2);
+      }
+    }, 1000);
+  });
+}
+
+const inputs = [1, 2, 3, 4, 5];
+
+mapLimit(inputs, 2, mapper, (err, results) => {
+  if (err) {
+    console.error("❌ Error:", err);
+  } else {
+    console.log("🎯 Results:", results);
+  }
+});
+
+// OUTPUT
+// 🚀 START 1
+// 🚀 START 2
+// ✅ END 1
+// 🚀 START 3
+// ✅ END 2
+// 🚀 START 4
+// 🚀 START 5
+// ✅ END 4
+// ✅ END 5
+// ERROR!
+// 🎯 Results: [
+//   { status: 'fulfilled', value: 2 },
+//   { status: 'fulfilled', value: 4 },
+//   { status: 'rejected', error: 'Error at 3' },
+//   { status: 'fulfilled', value: 8 },
+//   { status: 'fulfilled', value: 10 }
+// ]
+
+
+
+// --------------------------------------------------------------
+ /* 22. Given a 2D array of [name, marks]:
+      // 1️⃣ Group marks by name
+     // 2️⃣ Compute average per name
+     // 3️⃣ Return the maximum average 
+*/
+// -------------------------------------------------------------
+
+function processData(data) {
+  /**
+   * 🛑 EDGE CASE #1
+   * If input is empty, no students exist
+   * Returning 0 (or -Infinity depending on requirement)
+   */
+  if (!Array.isArray(data) || data.length === 0) {
+    return 0;
+  }
+
+  // =====================================================
+  // 1️⃣ GROUP MARKS BY NAME
+  // =====================================================
+  /**
+   * We convert:
+   * [
+   *   ["Alice", 80],
+   *   ["Bob", 90],
+   *   ["Alice", 100]
+   * ]
+   *
+   * Into:
+   * {
+   *   Alice: [80, 100],
+   *   Bob: [90]
+   * }
+   */
+  const grouped = data.reduce((acc, pair) => {
+    /**
+     * 🧠 Destructuring improves readability
+     * pair = ["Alice", 80]
+     */
+    const [name, mark] = pair;
+
+    /**
+     * 🛑 EDGE CASE #2
+     * Ignore invalid entries
+     * - missing name
+     * - non-number marks
+     */
+    if (typeof name !== "string" || typeof mark !== "number") {
+      return acc;
+    }
+
+    /**
+     * If this is the first time we see the name,
+     * initialize an empty array
+     */
+    if (!acc[name]) {
+      acc[name] = [];
+    }
+
+    /**
+     * Push the current mark into that student's list
+     */
+    acc[name].push(mark);
+
+    return acc;
+  }, {}); // initial accumulator is an empty object
+  
+    console.log("STEP 1 - Grouped:", grouped);
+
+  // =====================================================
+  // 2️⃣ COMPUTE AVERAGE PER NAME
+  // =====================================================
+  /**
+   * Convert grouped object into an array:
+   * { Alice: [80, 100] }
+   * →
+   * [ ["Alice", [80, 100]] ]
+   */
+  const averages = Object.entries(grouped).map(([name, marks]) => {
+    /**
+     * Sum all marks for this student
+     */
+    const total = marks.reduce((sum, value) => {
+      return sum + value;
+    }, 0);
+
+    /**
+     * Average = total marks / number of subjects
+     * marks.length is safe because empty arrays never occur
+     */
+    const avg = total / marks.length;
+
+    return [name, avg];
+  });
+  console.log("STEP 2 - Averages:", averages);
+  
+  // =====================================================
+  // 3️⃣ FIND MAXIMUM AVERAGE
+  // =====================================================
+  /**
+   * Extract only the average values
+   * [ ["Alice", 90], ["Bob", 80] ] → [90, 80]
+   */
+  const maxAverage = Math.max(
+    ...averages.map(([, avg]) => avg)
+  );
+  console.log("STEP 3 - Max Average:", maxAverage);
+  return maxAverage;
+}
+
+const dataRecord = [
+  ["Alice", 80],
+  ["Bob", 90],
+  ["Alice", 100],
+  ["Bob", 70],
+];
+
+console.log(processData(dataRecord)); 
+// STEP 1 - Grouped: { Alice: [ 80, 100 ], Bob: [ 90, 70 ] }
+// STEP 2 - Averages: [ [ 'Alice', 90 ], [ 'Bob', 80 ] ]
+// STEP 3 - Max Average: 90
+// 90
+
+
+// --------------------------------------------------------------
+   // 23. GENERATE SUM
+   /**
+    * Implement a function generateSum(n) such that:
+      1️⃣ It allows exactly n chained calls
+      2️⃣ Each call receives one number
+      3️⃣ After the nth call, it returns the sum of all numbers
+    */
+// -------------------------------------------------------------
+
+// APPROACH 1 USING CLOSURE
+function generateSum(n) {
+  /**
+   * 🧠 `count` tracks how many times function is called
+   * 🧠 `total` stores cumulative sum
+   * These values persist due to closure
+   */
+  let count = 0;
+  let total = 0;
+
+  /**
+   * This inner function is returned and called repeatedly
+   */
+  function inner(value) {
+    count++;
+    total += value;
+
+    /**
+     * 🛑 BASE CONDITION
+     * Once called `n` times, return final sum
+     */
+    if (count === n) {
+      return total;
+    }
+
+    /**
+     * Otherwise, return the same function
+     * → enables chaining: fn(1)(2)(3)...
+     */
+    return inner;
+  }
+
+  return inner;
+}
+
+
+// APPROACH 2 USING THIS AND BIND
+
+function generateSum(n) {
+  /**
+   * State object that will be bound as `this`
+   */
+  const context = {
+    limit: n,
+    count: 0,
+    total: 0,
+  };
+
+  function inner(value) {
+    this.count++;
+    this.total += value;
+
+    /**
+     * When enough calls are made → return sum
+     */
+    if (this.count === this.limit) {
+      return this.total;
+    }
+
+    /**
+     * Bind `this` again so chaining continues
+     */
+    return inner.bind(this);
+  }
+
+  // Initial bind
+  return inner.bind(context);
+}
+
+const sum = generateSum(4);
+console.log(sum(1)(2)(3)(4)); // 10
+
+// Yes. Each call to bind creates a new function reference.
+// call executes the function immediately, whereas bind returns a new function reference required for chaining.
+//What bind does:
+// Creates a new function
+// Permanently attaches (locks) this
+// Returns a function that remembers the same context
+
+
+// --------------------------------------------------------------
+   // 24. STORE CLASS
+   /**
+    Design a Store class that supports:
+
+      1️⃣ subscribe(key, onUpdate, onCleanup)
+          Subscribe to changes for a specific key.
+          onUpdate(value) → called whenever the value for that key changes.
+          onCleanup() → called when the subscription is removed.
+          Must return a cleanup function that unsubscribes only that subscriber.
+
+      2️⃣ save(key, value)
+         Save a value for a key.
+         Notify all subscribers of that key immediately.
+
+      3️⃣ remove(key)
+          Remove the key from the store.
+         Clean up all subscriptions for that key.
+    */
+// -------------------------------------------------------------
+
+class Store {
+  constructor() {
+    /**
+     * 🗄 Internal cache
+     * key → value
+     */
+    this.data = new Map();
+
+    /**
+     * 👂 Subscribers map
+     * key → Set of subscriber objects
+     *
+     * Each subscriber:
+     * {
+     *   onUpdate: function,
+     *   onCleanup: function
+     * }
+     */
+    this.subscribers = new Map();
+  }
+
+  /**
+   * 🔔 Subscribe to updates for a key
+   */
+  subscribe(key, onUpdate, onCleanup) {
+    // ✅ Ensure subscriber list exists for the key
+    if (!this.subscribers.has(key)) {
+      this.subscribers.set(key, new Set());
+    }
+
+    const subscriber = { onUpdate, onCleanup };
+    this.subscribers.get(key).add(subscriber);
+
+    /**
+     * ⚡ Immediately notify if value already exists
+     * (important edge case — avoids stale UI)
+     */
+    if (this.data.has(key)) {
+      onUpdate(this.data.get(key));
+    }
+
+    /**
+     * 🧹 Return cleanup function
+     * Removes ONLY this subscriber
+     */
+    return () => {
+      const subs = this.subscribers.get(key);
+      if (!subs) return;
+
+      subs.delete(subscriber);
+
+      // Call cleanup if provided
+      if (onCleanup) {
+        onCleanup();
+      }
+
+      // 🧠 Memory optimization:
+      // Remove key if no subscribers left
+      if (subs.size === 0) {
+        this.subscribers.delete(key);
+      }
+    };
+  }
+
+  /**
+   * 💾 Save value & notify subscribers
+   */
+  save(key, value) {
+    this.data.set(key, value);
+
+    const subs = this.subscribers.get(key);
+    if (!subs) return;
+
+    // Notify all subscribers
+    subs.forEach(({ onUpdate }) => {
+      try {
+        onUpdate(value);
+      } catch (err) {
+        console.error("Subscriber error:", err);
+      }
+    });
+  }
+
+  /**
+   * ❌ Remove key and cleanup all subscribers
+   */
+  remove(key) {
+    this.data.delete(key);
+
+    const subs = this.subscribers.get(key);
+    if (!subs) return;
+
+    // Call cleanup for each subscriber
+    subs.forEach(({ onCleanup }) => {
+      if (onCleanup) {
+        onCleanup();
+      }
+    });
+
+    // Remove all subscribers for the key
+    this.subscribers.delete(key);
+  }
+}
+
+
+/* TEST CASE */
+const store = new Store();
+
+const unsubscribe = store.subscribe(
+  "user",
+  (value) => {
+    console.log("🔄 User updated:", value);
+  },
+  () => {
+    console.log("🧹 User subscription cleaned");
+  }
+);
+
+store.save("user", { name: "Sumeeth", age: 25 });
+// 🔄 User updated: { name: "Sumeeth", age: 25 }
+
+unsubscribe();
+// 🧹 User subscription cleaned
+
+store.save("user", { name: "Updated" });
+// ❌ No update (unsubscribed)
+
+
+// --------------------------------------------------------------
+   // 24. STORE CLASS
+   /**
+    🚕 Uber Driver – Chainable Class with Priority Execution
+
+  🔥 Problem Statement (Clean Restate)
+    Design a chainable JavaScript class UberDriver with methods like:
+      pick(name, location)
+      drive(minutes)
+      drop()
+      rest(minutes)
+      coffeeBreak(minutes) ← must always execute first
+      status()
+    */
+
+    // SINCE EXECUTION ORDER MATTERS AND ASYNC IS INVOLVED WE'LL USE PROMISES
+// -------------------------------------------------------------
+
+class UberDriver {
+  constructor() {
+    this.queue = [];  // 🚕 normal tasks
+    this.priorityQueue = []; // 🚨 coffeeBreak tasks
+
+    this.currentPassenger = null;
+    this.location = null;
+    
+    // 🕒 Start execution after chaining completes
+    Promise.resolve().then(() => this.run());
+  }
+
+  async run() {
+    // 1️⃣ Run priority tasks first
+    for (const task of this.priorityQueue) {
+      await task();
+    }
+    
+    // 2️⃣ Then run normal tasks
+    for (const task of this.queue) {
+      await task();
+    }
+  }
+
+  delay(seconds) {
+    return new Promise(res => setTimeout(res, seconds * 1000));
+  }
+
+  /* ---------------- Actions OR Chainable APIs ---------------- */
+
+  pick(name, location) {
+    this.queue.push(async () => {
+      if (this.currentPassenger) {
+        console.log(`❌ Already driving ${this.currentPassenger}`);
+        return;
+      }
+
+      this.currentPassenger = name;
+      this.location = location;
+      console.log(`🚕 Picked up ${name} at location ${location}`);
+    });
+    return this;
+  }
+
+  drive(minutes) {
+    this.queue.push(async () => {
+      if (!this.currentPassenger) {
+        console.log(`⚠️ No passenger to drive`);
+        return;
+      }
+
+      console.log(`🚗 Driving ${this.currentPassenger} for ${minutes} minutes`);
+      await this.delay(minutes);
+    });
+    return this;
+  }
+
+  status() {
+    this.queue.push(async () => {
+      if (this.currentPassenger) {
+        console.log(`📊 On trip with ${this.currentPassenger}`);
+      } else {
+        console.log(`📊 Driver is idle`);
+      }
+    });
+    return this;
+  }
+
+  drop() {
+    this.queue.push(async () => {
+      if (!this.currentPassenger) {
+        console.log(`⚠️ No passenger to drop`);
+        return;
+      }
+
+      console.log(`📍 Dropped ${this.currentPassenger}`);
+      this.currentPassenger = null;
+      this.location = null;
+    });
+    return this;
+  }
+
+  rest(minutes) {
+    this.queue.push(async () => {
+      console.log(`😴 Resting for ${minutes} minutes`);
+      await this.delay(minutes);
+    });
+    return this;
+  }
+
+  /* ---------------- Priority Method ---------------- */
+
+  coffeeBreak(minutes) {
+    this.priorityQueue.push(async () => {
+      console.log(`☕ Coffee break for ${minutes} minutes`);
+      await this.delay(minutes);
+    });
+    return this;
+  }
+}
+
+
+new UberDriver()
+  .pick("Alice", 1)
+  .status()
+  .drive(2)
+  .drop()
+  .status()
+  .pick("Bob", 2)
+  .coffeeBreak(1)   // 👈 Executes FIRST
+  .drive(1)
+  .drop();
+
+// OUTPUT
+
+// ☕ Coffee break for 1 minutes
+// 🚕 Picked up Alice at location 1
+// 📊 On trip with Alice
+// 🚗 Driving Alice for 2 minutes
+// 📍 Dropped Alice
+// 📊 Driver is idle
+// 🚕 Picked up Bob at location 2
+// 🚗 Driving Bob for 1 minutes
+// 📍 Dropped Bob
+
+
+
+// --------------------------------------------------------------
+   // 25. CUSTOM JSON.STRINGIFY()
+   /**
+    Why WeakSet?
+      Doesn't prevent garbage collection
+      Used for tracking object references
+// -------------------------------------------------------------
+
+/**
+ * 🧠 Custom JSON.stringify implementation
+ * @param {*} value
+ * @returns {string|undefined}
+ */
+function myStringify(value, seen = new WeakSet()) {
+    
+     if (value && typeof value === "object") {
+        if (seen.has(value)) {
+          throw new TypeError("Converting circular structure to JSON");
+        }
+        seen.add(value);
+     }
+
+  /**
+   * 1️⃣ Handle primitive types first
+   */
+
+  // null is special (typeof null === "object")
+  if (value === null) {
+    return "null";
+  }
+
+  // String → wrap in double quotes
+  if (typeof value === "string") {
+    return `"${value}"`;
+  }
+
+  // Number → convert directly
+  if (typeof value === "number") {
+    // JSON.stringify converts NaN & Infinity to null
+    if (!isFinite(value)) return "null";
+    return String(value);
+  }
+
+  // Boolean
+  if (typeof value === "boolean") {
+    return String(value);
+  }
+
+  // undefined, function, symbol at root → return undefined
+  if (
+    typeof value === "undefined" ||
+    typeof value === "function" ||
+    typeof value === "symbol"
+  ) {
+    return undefined;
+  }
+
+  /**
+   * 2️⃣ Handle Arrays
+   */
+  if (Array.isArray(value)) {
+
+    /**
+     * JSON behavior:
+     * undefined / function inside array → becomes null
+     *
+     * Example:
+     * JSON.stringify([1, undefined, 3])
+     * → "[1,null,3]"
+     */
+
+    const result = value.map((item) => {
+      const serialized = myStringify(item, seen);
+      return serialized === undefined ? "null" : serialized;
+    });
+
+    return `[${result.join(",")}]`;
+  }
+
+  /**
+   * 3️⃣ Handle Objects
+   */
+  if (typeof value === "object") {
+
+    const keys = Object.keys(value); // only enumerable keys
+    const result = [];
+
+    for (let key of keys) {
+
+      const serializedValue = myStringify(value[key], seen);
+
+      /**
+       * JSON behavior:
+       * Skip keys where value is:
+       * - undefined
+       * - function
+       * - symbol
+       */
+      if (serializedValue !== undefined) {
+
+        // Key must always be string-wrapped
+        result.push(
+          `"${key}":${serializedValue}`
+        );
+      }
+    }
+
+    return `{${result.join(",")}}`;
+  }
+}
+
+console.log(myStringify("hello"));
+// "hello"
+
+console.log(myStringify(123));
+// 123
+
+console.log(myStringify([1, undefined, 3]));
+// [1,null,3]
+
+
+const obj = {
+  name: "Sumeeth",
+  age: 25,
+  test: undefined,
+};
+
+// obj.self = obj;
+
+try {
+  console.log(myStringify(obj));  // {"name":"Sumeeth","age":25}
+} catch (e) {
+  console.error(e.message);
+}
+
+
+
+// --------------------------------------------------------------
+   // 26. Topological Sort with Cycle Detection (DFS)
+   /**
+     * - Detects circular dependencies
+     * - Returns correct execution order
+  */
+// -------------------------------------------------------------
+
+// 🕒 Simulated delay utility
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveDependenciesWithCycleDetection(graph) {
+  const nodes = Object.keys(graph);
+  const visited = new Set();
+  const recStack = new Set();
+  const topoOrder = [];
+
+  function dfs(node) {
+    // 🚨 Cycle detected
+    if (recStack.has(node)) {
+      throw new Error(`Cycle detected at node: ${node}`);
+    }
+
+    // Already processed
+    if (visited.has(node)) return;
+
+    visited.add(node);
+    recStack.add(node);
+
+    // Visit dependencies first
+    for (const dep of graph[node].dependency || []) {
+      dfs(dep);
+    }
+
+    recStack.delete(node);
+    topoOrder.push(node); // Post-order
+  }
+
+  for (const node of nodes) {
+    if (!visited.has(node)) {
+      dfs(node);
+    }
+  }
+
+  // 🔑 IMPORTANT FIX: reverse post-order for correct topo order
+  return topoOrder.reverse();
+}
+
+/**
+ * 🚀 Execute tasks with:
+ * - Dependency enforcement
+ * - Concurrency limit
+ */
+function executeTasksInParallel(order, graph, limit = 2) {
+  let activeTasks = 0;
+  const completed = new Set();
+  const pending = new Set(order);
+
+  return new Promise((resolve) => {
+
+  /**
+   * ✅ canRun(taskId)
+   * ------------------------------------------------
+   * Checks whether a task is eligible to run
+   *
+   * A task can run ONLY IF:
+   * - It has no dependencies OR
+   * - All its dependencies are already completed
+   */
+  function canRun(taskId) {
+    return (
+      // Get dependencies array (fallback to empty if undefined)
+      (graph[taskId].dependency || [])
+        // every() ensures ALL dependencies are completed
+        .every((dep) => completed.has(dep))
+    );
+  }
+
+  /**
+   * 🚀 executeNext()
+   * ------------------------------------------------
+   * Core scheduler function:
+   * - Picks runnable tasks
+   * - Respects concurrency limit
+   * - Triggers next execution when a task finishes
+   */
+  function executeNext() {
+
+    /**
+     * 🛑 BASE CASE (Termination Condition)
+     *
+     * When:
+     * - No pending tasks left AND
+     * - No active (running) tasks
+     *
+     * ➜ Entire workflow is complete
+     */
+    if (pending.size === 0 && activeTasks === 0) {
+      resolve(); // Resolve outer Promise
+      return;
+    }
+
+    /**
+     * 🔁 Iterate over pending tasks
+     *
+     * IMPORTANT:
+     * - We spread into a new array to avoid mutating
+     *   the Set while iterating
+     */
+    for (const taskId of [...pending]) {
+
+      /**
+       * ⛔ Concurrency Guard
+       *
+       * If we already reached the max allowed parallel tasks,
+       * stop scheduling more for now.
+       */
+      if (activeTasks >= limit) return;
+
+      /**
+       * ⏳ Dependency Guard
+       *
+       * Skip this task if its dependencies are NOT completed yet.
+       */
+      if (!canRun(taskId)) continue;
+
+      /**
+       * 🧹 Move task from pending → running
+       */
+      pending.delete(taskId); // Remove from pending queue
+      activeTasks++;          // Increment active count
+
+      /**
+       * ▶️ Execute the async task
+       */
+      graph[taskId]
+        .task()
+        .then(() => {
+          // ✅ Task resolved successfully
+          console.log(`✅ ${taskId} completed`);
+          completed.add(taskId); // Mark as completed
+        })
+        .catch((err) => {
+          // ❌ Task failed
+          console.error(`❌ ${taskId} failed`, err);
+        })
+        .finally(() => {
+          /**
+           * 🔁 Cleanup + Reschedule
+           *
+           * - Decrease active task count
+           * - Try to schedule next eligible tasks
+           */
+          activeTasks--;
+          executeNext(); // Re-run scheduler
+        });
+    }
+  }
+
+  /**
+   * 🚦 Kick off execution
+   */
+  executeNext();
+  });
+}
+
+/* --------------------------------------------------
+   🧪 Example Usage
+-------------------------------------------------- */
+
+const asyncGraph = {
+  A: {
+    dependency: [],
+    task: () => delay(1000),
+  },
+  B: {
+    dependency: ["A"],
+    task: () => delay(800),
+  },
+  C: {
+    dependency: ["A"],
+    task: () => delay(500),
+  },
+  D: {
+    dependency: ["B", "C"],
+    task: () => delay(700),
+  },
+};
+
+try {
+  const order = resolveDependenciesWithCycleDetection(asyncGraph);
+  console.log("🔀 Execution Order:", order);
+
+  executeTasksInParallel(order, asyncGraph, 2).then(() => {
+    console.log("🎉 All tasks completed");
+  });
+} catch (e) {
+  console.error("🚨 ERROR:", e.message);
+}
+
+// OUTPUT
+
+// 🔀 Execution Order: [ 'D', 'C', 'B', 'A' ]
+// ✅ A completed
+// ✅ C completed
+// ✅ B completed
+// ✅ D completed
+// 🎉 All tasks completed
+
+
+
+/* --------------------------------------------------
+   27. SMART PAGINATION COMPONENTS WITH ELIPSIS
+  -------------------------------------------------- 
+*/
+
+function getPaginationPages(current, total) {
+  const pages = new Set();
+
+  // Always include first & last
+  pages.add(1);
+  pages.add(total);
+
+  // Include current and neighbors
+  pages.add(current);
+  pages.add(current - 1);
+  pages.add(current + 1);
+
+  // Remove invalid pages
+  const validPages = [...pages]
+    .filter(p => p >= 1 && p <= total)
+    .sort((a, b) => a - b);
+
+  const result = [];
+
+  for (let i = 0; i < validPages.length; i++) {
+    const curr = validPages[i];
+    const prev = validPages[i - 1];
+
+    // If gap > 1 → insert ellipsis
+    if (i > 0 && curr - prev > 1) {
+      result.push("...");
+    }
+
+    result.push(curr);
+  }
+
+  return result;
+}
+
+console.log(getPaginationPages(1, 10));
+// [1, 2, "...", 10]
+
+console.log(getPaginationPages(5, 10));
+// [1, "...", 4, 5, 6, "...", 10]
+
+console.log(getPaginationPages(9, 10));
+// [1, "...", 8, 9, 10]
+
+
+/* --------------------------------------------------
+   28. PRIORITY BASED DATA FETCHING
+      Rules
+       1. All network requests must be initiated in parallel (not sequentially)
+       2. Endpoint priority is determined by position in the array(index 0 = highest priority)
+       3. A response is considered valid only if the request resolves successfully 
+       4. As soon as the highest-priority successful response can be determined,
+          it should be returned without unecessary waiting.
+       5. If all request fail(network error or non-success HTTP status),
+          the function must reject with an appropriate error.  
+  -------------------------------------------------- 
+*/
+
+function getPreferredResponse(endpoints) {
+  if (!Array.isArray(endpoints) || endpoints.length === 0) {
+    return Promise.reject(
+      new Error("Endpoints should be a valid non-empty array")
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    const results = new Array(endpoints.length);
+    let settledCount = 0;
+    let resolved = false;
+
+    endpoints.forEach((endpoint, index) => {
+      fetch(endpoint)
+        .then((response) => {
+          if (!response.ok) throw new Error("API call failed");
+          return response.json();
+        })
+        .then((data) => {
+          results[index] = { success: true, data };
+        })
+        .catch((err) => {
+          results[index] = { success: false, err };
+        })
+        .finally(() => {
+          settledCount++;
+          checkResolution();
+        });
+    });
+
+    function checkResolution() {
+      if (resolved) return;
+
+      for (let i = 0; i < results.length; i++) {
+        const current = results[i];
+
+        // Higher-priority request still pending
+        if (current === undefined) return;
+
+        if (current.success) {
+          resolved = true;
+          resolve(current.data);
+          return;
+        }
+      }
+
+      if (!resolved && settledCount === endpoints.length) {
+        resolved = true;
+        reject(new Error("All APIs failed"));
+      }
+    }
+  });
+}
