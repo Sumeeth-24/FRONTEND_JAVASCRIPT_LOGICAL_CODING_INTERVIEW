@@ -738,56 +738,56 @@ class Calculator {
   constructor(initialValue = 0) {
     // `this.value` holds the current calculation result
     // Stored on the instance so it persists across chained calls
-    this.value = initialValue;
+    this.currentValue = initialValue;
   }
 
-  // ➕ Adds a number to the current value
-  add(amount) {
+  lacs(amount) {
     // Update internal state
     // We mutate the instance instead of creating a new object
-    this.value += amount;
+    this.currentValue += amount * 100000;
 
     // 🔁 Return `this` so that another method
     // can be called on the same instance
     return this;
   }
 
-  // ➖ Subtracts a number from the current value
-  subtract(amount) {
+  crore(amount) {
     // Modify the stored value
-    this.value -= amount;
+    this.currentValue += amount * 10000000;
 
     // 🔁 Returning `this` enables chaining like:
     // calculator.subtract(2).multiply(3)
     return this;
   }
 
-  // ✖ Multiplies the current value
-  multiply(factor) {
+  thousand(amount) {
     // Apply multiplication on the internal value
-    this.value *= factor;
+    this.currentValue += amount * 1000;
 
     // 🔁 Returning the instance maintains the chain
     return this;
   }
 
   // 📤 Retrieves the final calculated value
-  getResult() {
+  value() {
     // Separate "computation" from "retrieval"
     // Improves readability and API design
-    return this.value;
+    return this.currentValue;
   }
 }
 
-const calc = new Calculator(10);
+const computeAmount = new Calculator(15);
 
-const answer = calc
-  .add(5)
-  .subtract(3)
-  .multiply(2)
-  .getResult();
+const answer = computeAmount
+ .lacs(15)
+ .crore(5)
+ .crore(2)
+ .lacs(20)
+ .thousand(45)
+ .crore(7)
+ .value();
 
-console.log(answer); // 👉 24
+console.log(answer);
 
 
 

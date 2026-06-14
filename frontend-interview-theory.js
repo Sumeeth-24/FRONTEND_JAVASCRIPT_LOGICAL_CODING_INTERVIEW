@@ -2138,3 +2138,255 @@ async function processItemsInChunks(items, chunkSize = 50) {
  * - Edge computing (Cloudflare Workers, Lambda@Edge)
  * - Browser resource prioritization (fetchpriority)
  */
+
+Frontend Performance
+The interviewer asked detailed questions about rendering performance and animations.
+
+Discussion Areas:
+What FPS (Frames Per Second) means in frontend applications
+Why smooth rendering matters for user experience
+Why certain CSS properties are expensive to animate
+We discussed why properties like:
+
+transform
+opacity
+are generally preferred for performant animations compared to properties that trigger layout recalculations or repaints.
+
+System Design Discussion — Messaging Feature
+I was asked to design a “Send Message” functionality similar to a chat application.
+
+Topics Covered:
+Tagging users in messages
+UI component structure
+Communication mechanisms between client and server
+Data flow and state handling
+Canvas Discussion
+The interviewer also asked:
+
+What is Canvas?
+Why can Canvas sometimes perform better than traditional DOM rendering?
+We discussed scenarios involving:
+
+Large-scale rendering
+Continuous repainting
+Graphics-heavy interfaces
+Round 3: JavaScript, React, HTML & CSS Fundamentals
+Duration: ~60 minutes
+
+This was one of the deepest frontend-focused rounds.
+
+HTML & CSS Topics
+Semantic HTML
+Why are semantic elements important
+Accessibility and SEO benefits
+Why using only generic containers is not ideal
+CSS Layout Systems
+Discussion around:
+
+Flexbox vs Grid
+When to use each approach
+I was also asked to implement a layout using CSS Grid syntax.
+
+Responsive Design
+Topics included:
+
+Media queries
+Relative sizing units
+Building layouts adaptable across devices
+JavaScript Topics
+Function Context
+Differences between:
+call
+apply
+bind
+Coding Task
+Implement a polyfill for bind
+Browser Rendering Internals
+The discussion went deeper into browser behavior:
+
+Critical Rendering Path
+CSSOM construction
+Event Loop execution model
+React Topics
+Advanced React APIs
+forwardRef
+useImperativeHandle
+
+
+Round 1: Machine Coding (2 Hours)
+As expected for a Frontend Engineer role, the interview started with a Machine Coding round.
+
+I was provided with a problem statement and around 2 hours to complete it. Sometimes the interviewer may also provide a boilerplate zip setup.
+
+Example Questions Asked
+Design an Email Client like Outlook
+Create a Chat Interface like Teams
+Create a Notification System like Teams
+This round primarily evaluates:
+
+UI engineering skills
+Component structuring
+Semantic HTML
+CSS architecture
+JavaScript problem solving
+Responsiveness
+Code organization
+Tradeoff discussions
+Important Learnings From This Round
+1. Never Jump Directly Into Coding
+Spend the initial minutes understanding the problem thoroughly.
+
+Interviewers intentionally include ambiguous requirements to evaluate:
+
+Communication skills
+Clarification ability
+Product thinking
+Always ask:
+
+Pagination needed?
+Mobile responsiveness?
+Virtualization?
+Accessibility expectations?
+State persistence?
+API integration assumptions?
+2. Semantic HTML Matters A LOT
+One major thing interviewers observe is whether you know proper HTML semantics.
+
+Bad Example:
+
+<div class="header"></div>
+<div class="sidebar"></div>
+<div class="footer"></div>
+Good Example:
+
+<header></header>
+<aside></aside>
+<main></main>
+<footer></footer>
+Semantic HTML improves:
+
+Accessibility
+SEO
+Maintainability
+Screen reader support
+3. Know DOM Manipulation Tradeoffs
+One interesting discussion happened around:
+
+document.createElement()
+vs
+
+innerHTML
+Press enter or click to view image in full size
+
+For rapidly generating large UI during interviews, sometimes innerHTML can save time.
+
+But for production systems:
+
+Sanitization matters
+XSS prevention matters
+Maintainability matters
+4. Flexbox & Grid Are Mandatory
+Most frontend machine coding rounds become painful if:
+
+Flexbox is weak
+Grid understanding is poor
+Typical expectations:
+
+Responsive layouts
+Sidebar management
+Overflow handling
+Sticky sections
+Dynamic resizing
+5. Use Modern JavaScript Features
+This round is also your opportunity to demonstrate modern JS expertise.
+
+Examples:
+
+Optional chaining
+Nullish coalescing
+Async/await
+Destructuring
+Modules
+Array helpers
+Debouncing
+Throttling
+6. Incremental Development Wins
+Never aim for perfection first.
+
+Instead:
+
+Build skeleton UI
+Add functionality
+Improve responsiveness
+Add edge cases
+Polish UI
+A partially working solution is far better than an unfinished “perfect architecture”.
+
+Round 3: LLD / Design Round
+Initially, I was asked to design a:
+
+Design Chess Board & Snake & Ladder Game
+
+This round focused on:
+
+Low-Level Design
+OOP principles
+Class modeling
+Scalability
+Expectations in This Round
+1. Identify Top-Level Classes
+Example:
+
+class Board {}
+class Player {}
+class Dice {}
+class Snake {}
+class Ladder {}
+class Game {}
+2. Break Problems Into Smaller Responsibilities
+Interviewers observe:
+
+Separation of concerns
+Single responsibility principle
+Encapsulation
+3. Data Structure Selection
+Examples:
+
+Arrays
+Maps
+Queues
+Graph representations
+4. Scalability Thinking
+Can your design support:
+
+Multiplayer?
+Custom boards?
+AI players?
+Persistence?
+
+Problem Statement
+Millions of tweets are arriving every second.
+Trigger an alert whenever a specific word appears a billion times within any moving 1-hour window.
+
+This was an extremely interesting scalability question.
+
+What Was Expected
+1. Data Structure Design
+Questions to think:
+
+Queue?
+HashMap?
+Sliding window?
+Bucketing?
+2. Memory Optimization
+How will you store:
+
+Billions of events?
+Timestamps?
+Counts?
+3. Scalability
+How will your solution work:
+
+Across distributed systems?
+Across shards?
+Across multiple servers?
