@@ -134,6 +134,7 @@ const arr1 = [0, 1, 2, [3, 4], [5, 6], [1, 2, 3, [4, [6, 7]]]];
 // Output the flattened version
 console.log("# RESULT: ", arr1.myFlatArray()); // [0,1,2,3,4,5,6,1,2,3,4,6,7]
 
+
 // --------------------------------------------------------------
 // 3. FLATTEN ARRAY WITH DEPTH (Polyfill)
 // --------------------------------------------------------------
@@ -169,8 +170,9 @@ console.log(arr.myFlatArray(2));
 console.log(arr.myFlatArray(3));
 // [0, 1, 2, 3, 4, 5]
 
+
 // --------------------------------------------------------------
-// 3. FLATTEN DEEPLY NESTED OBJECT
+// 4. FLATTEN DEEPLY NESTED OBJECT
 // --------------------------------------------------------------
 
 // Function to deeply flatten an object (handles nested objects + arrays)
@@ -261,8 +263,9 @@ console.log(flattenedUser);
 //   preferences: null
 // }
 
+
 // --------------------------------------------------------------
-// 4. ADD SUM OF DEEPLY NESTED OBJECT
+// 5. ADD SUM OF DEEPLY NESTED OBJECT
 // --------------------------------------------------------------
 
 let data = {
@@ -313,8 +316,9 @@ const sumDeepObject = (obj) => {
 
 console.log(sumDeepObject(data)); // 3
 
+
 // --------------------------------------------------------------
-// 5. IMPLEMENT DEEP FILTER
+// 6. IMPLEMENT DEEP FILTER
 // --------------------------------------------------------------
 
 function deepFilter(collection, callback) {
@@ -446,7 +450,7 @@ console.log("filtered2 ==>", filtered2);
 
 
 // --------------------------------------------------------------
-// 6. IMPLEMENT DEEP EQUAL
+// 7. IMPLEMENT DEEP EQUAL
 // --------------------------------------------------------------
 
 // Implement a function deepEqual that performs a deep comparison between two values. It returns true if two input values are deemed equal, and returns false if not.
@@ -522,7 +526,7 @@ export default function deepEqual(value1, value2) {
 
 
 // --------------------------------------------------------------
-// 7. IMPLEMENT DEEP MAP
+// 8. IMPLEMENT DEEP MAP
 // --------------------------------------------------------------
 
 export default function deepMap(value, fn) {
@@ -598,9 +602,8 @@ function mapHelper(element, fn, original) {
 
 
 
-
 // --------------------------------------------------------------
-// 8. IMPLEMENT DEEP MERGE
+// 9. IMPLEMENT DEEP MERGE
 // --------------------------------------------------------------
 
 // Implement a function deepMerge(objA, objB) to takes in two objects and returns a new object after deep merging them:
@@ -665,9 +668,8 @@ function isPlainObject(value) {
 }
 
 
-
 // --------------------------------------------------------------
-// 9. IMPLEMENT DEEP OMIT
+// 10. IMPLEMENT DEEP OMIT
 // --------------------------------------------------------------
 
 // Implement a function deepOmit(obj, keys) that removes specified keys and their corresponding values from an object, including nested objects or arrays. It works recursively to traverse through the entire object structure, ensuring that all occurrences of the specified keys are removed at all levels. The function takes in an object (obj) and an array of string keys (keys).
@@ -729,7 +731,7 @@ export default function deepOmit(obj, keys) {
 
 
 // --------------------------------------------------------------
-// 10. CHAIN CALCULATOR
+// 11. CHAIN CALCULATOR
 // --------------------------------------------------------------
 
 class Calculator {
@@ -791,9 +793,8 @@ console.log(answer);
 
 
 
-
 // --------------------------------------------------------------
-// 11. POLYFILL FOR MEMOIZE AN ASYNC FUNCTION
+// 12. POLYFILL FOR MEMOIZE AN ASYNC FUNCTION
 // --------------------------------------------------------------
 
 /* Write a function that wraps an async function and caches its results so that the same async call is not executed again for the same inputs. */
@@ -936,7 +937,7 @@ setTimeout(() => {
 
 
 // --------------------------------------------------------------
-// 12. RETRY PROMISES N NUMBER OF TIMES
+// 13. RETRY PROMISES N NUMBER OF TIMES
 // --------------------------------------------------------------
 
 /* CREATE A DELAY function */
@@ -989,7 +990,7 @@ testRetryLogic();
 
 
 // --------------------------------------------------------------
-// 13. DEEP CLONE AN OBJECT
+// 14. DEEP CLONE AN OBJECT
 // --------------------------------------------------------------
 
 function deepClone(obj, seen = new WeakMap()) {
@@ -1166,7 +1167,7 @@ function deepClone(obj, seen = new WeakMap()) {
 
 
 // --------------------------------------------------------------
-// 14. CANCELLABLE PROMISE
+// 15. CANCELLABLE PROMISE
 // --------------------------------------------------------------
 
 /**
@@ -1324,9 +1325,8 @@ p2.then((result) => {
 
 
 
-
 // --------------------------------------------------------------
-// 15. EVENT EMITTER
+// 16. EVENT EMITTER
 // --------------------------------------------------------------
 
 /**
@@ -1475,7 +1475,7 @@ sub.remove(); // Uncaught Error: Subscription has already removed"
 
 
 // --------------------------------------------------------------
-// 16. CONVERT FLAT DATA TO TREE STRUCTURE
+// 17. CONVERT FLAT DATA TO TREE STRUCTURE
 // --------------------------------------------------------------
 
 /**
@@ -1584,7 +1584,7 @@ console.log(treeData);
 
 
 // --------------------------------------------------------------
-// 17. BREADCRUMB TRAIL CONSTRUCTION
+// 18. BREADCRUMB TRAIL CONSTRUCTION
 // --------------------------------------------------------------
 
 /**
@@ -1664,7 +1664,7 @@ console.log(breadResult); // Audio >> Headphones >> Wired >> True wireless >> Bl
 
 
 // --------------------------------------------------------------
-// 18. CONCURRENCY CONTROL (Worker Pool Pattern)
+// 19. CONCURRENCY CONTROL (Worker Pool Pattern)
 // -------------------------------------------------------------
 
 /**
@@ -1841,7 +1841,7 @@ runWithConcurrency(tasks, 2).then((results) => {
 
 
 // --------------------------------------------------------------
-// 19. TASK RUNNER 
+// 20. TASK RUNNER 
 // -------------------------------------------------------------
 
 /**
@@ -1994,7 +1994,7 @@ Task failed: Error: T4 failed
 
 
 // --------------------------------------------------------------
-// 20. KLARNA MASKIFY 
+// 21. KLARNA MASKIFY 
 // -------------------------------------------------------------
 
 /**
@@ -2063,7 +2063,7 @@ console.log(maskify("Sk#ip#p$5k4y"));
 
 
 // --------------------------------------------------------------
-// 21. MAP LIMIT 
+// 22. MAP LIMIT 
 // -------------------------------------------------------------
 
 //mapLimit is just a value-to-task adapter on top of a concurrency-controlled executor.
@@ -2182,7 +2182,7 @@ mapLimit(inputs, 2, mapper, (err, results) => {
 
 
 // --------------------------------------------------------------
- /* 22. Given a 2D array of [name, marks]:
+ /* 23. Given a 2D array of [name, marks]:
       // 1️⃣ Group marks by name
      // 2️⃣ Compute average per name
      // 3️⃣ Return the maximum average 
@@ -2307,7 +2307,7 @@ console.log(processData(dataRecord));
 
 
 // --------------------------------------------------------------
-   // 23. GENERATE SUM
+   // 24. GENERATE SUM
    /**
     * Implement a function generateSum(n) such that:
       1️⃣ It allows exactly n chained calls
@@ -2397,7 +2397,7 @@ console.log(sum(1)(2)(3)(4)); // 10
 
 
 // --------------------------------------------------------------
-   // 24. STORE CLASS
+   // 25. STORE CLASS
    /**
     Design a Store class that supports:
 
@@ -2546,7 +2546,7 @@ store.save("user", { name: "Updated" });
 
 
 // --------------------------------------------------------------
-   // 24. STORE CLASS
+   // 25. STORE CLASS
    /**
     🚕 Uber Driver – Chainable Class with Priority Execution
 
@@ -2691,7 +2691,7 @@ new UberDriver()
 
 
 // --------------------------------------------------------------
-   // 25. CUSTOM JSON.STRINGIFY()
+   // 26. CUSTOM JSON.STRINGIFY()
    /**
     Why WeakSet?
       Doesn't prevent garbage collection
@@ -2828,7 +2828,7 @@ try {
 
 
 // --------------------------------------------------------------
-   // 26. Topological Sort with Cycle Detection (DFS)
+   // 27. Topological Sort with Cycle Detection (DFS)
    /**
      * - Detects circular dependencies
      * - Returns correct execution order
@@ -3041,7 +3041,7 @@ try {
 
 
 /* --------------------------------------------------
-   27. SMART PAGINATION COMPONENTS WITH ELIPSIS
+   28. SMART PAGINATION COMPONENTS WITH ELIPSIS
   -------------------------------------------------- 
 */
 
@@ -3090,7 +3090,7 @@ console.log(getPaginationPages(9, 10));
 
 
 /* --------------------------------------------------
-   28. PRIORITY BASED DATA FETCHING
+   29. PRIORITY BASED DATA FETCHING
       Rules
        1. All network requests must be initiated in parallel (not sequentially)
        2. Endpoint priority is determined by position in the array(index 0 = highest priority)
@@ -3155,3 +3155,895 @@ function getPreferredResponse(endpoints) {
     }
   });
 }
+
+/* --------------------------------------------------
+   30. PIPING 2
+      Create a function pipe that accepts multiple functions as an argument and a value and run this value through each function and return the final output.
+  -------------------------------------------------- 
+*/
+
+// pipe runs functions from left to right
+function pipe(...functions) {
+
+  // Return a new function that accepts the initial value
+  return function (value) {
+
+    // Pass the output of each function
+    // as the input to the next function
+    return functions.reduce((currentValue, currentFunction) => {
+
+      // Execute current function
+      return currentFunction(currentValue);
+
+    }, value); // Initial value for reduce
+  };
+}
+
+// Input:
+// const val = { salary: 10000 };
+
+// const getSalary = (person) => person.salary
+// const addBonus = (netSalary) => netSalary + 1000;
+// const deductTax = (grossSalary) => grossSalary - (grossSalary * .3);
+
+// const result = pipe(
+//   getSalary,
+//   addBonus,
+//   deductTax 
+// )(val);
+
+// Output:
+// 7700
+
+
+/* --------------------------------------------------
+   31. SUM OF ALL THE RESOLVED PROMISES
+
+      An array of promises will be given that will either resolve (with number) or reject, If all the promises reject -> reject, else resolve with the sum of all resolved promises.
+  -------------------------------------------------- 
+*/
+
+async function sumResolvedPromises(promises) {
+  // Wait for every promise to either fulfill or reject
+  const results = await Promise.allSettled(promises);
+
+  let sum = 0;
+  let hasResolved = false;
+
+  for (const result of results) {
+
+    // Only consider fulfilled promises
+    if (result.status === "fulfilled") {
+      sum += result.value;
+      hasResolved = true;
+    }
+  }
+
+  // If every promise rejected
+  if (!hasResolved) {
+    throw new Error("All promises rejected");
+  }
+
+  return sum;
+}
+
+const p1 = [
+  Promise.resolve(10),
+  Promise.reject("error"),
+  Promise.resolve(20),
+  Promise.reject("fail"),
+  Promise.resolve(5),
+];
+const result = sumResolvedPromises(p1).then(console.log).catch(console.error); // 35
+console.log('result', result)
+
+
+/* --------------------------------------------------
+   32. PIPING 1
+      Given an object which can have a function as a value at a nested level, create a function that will accept arguments as input and pass it through all the functions in the input object and return the computed value.
+  -------------------------------------------------- 
+*/
+
+function pipe(obj) {
+
+  // Return a function that accepts any number of arguments
+  return function (...args) {
+
+    // Recursive DFS
+    function dfs(current) {
+
+      // If it's a function, execute it
+      if (typeof current === "function") {
+        return current(...args);
+      }
+
+      // Primitive values
+      if (current === null || typeof current !== "object") {
+        return current;
+      }
+
+      // Create new object/array
+      const result = Array.isArray(current) ? [] : {};
+
+      // Traverse children
+      for (const key in current) {
+        result[key] = dfs(current[key]);
+      }
+
+      return result;
+    }
+
+    return dfs(obj);
+  };
+}
+
+
+const obj = {
+  a : {
+    b : (a,b,c) => a+b+c,
+    c : (a,b,c) => a+b-c,
+  },
+  d : (a,b,c) => a-b-c
+}
+
+const output = pipe(obj)(1,1,1);
+
+// OUTPUT
+// {
+//   a: {
+//     b: 3,
+//     c: 1
+//   },
+//   d: -1
+// }
+
+
+/* --------------------------------------------------
+   33. PROCESS ASYNC CALLBACL QUEUE - PART 2
+     Implement a async callback queue, that takes an processor function, on-complete function and concurrency and run those number of concurrent tasks at any given time through the processor function and invoke on-complete callback.
+  -------------------------------------------------- 
+*/
+
+function Queue(processorFn, onCompleteFn, concurrency) {
+
+    this.queue = [];
+    this.running = 0;
+    this.concurrency = concurrency;
+
+    this.processorFn = processorFn;
+    this.onCompleteFn = onCompleteFn;
+
+    this.drainListener = null;
+    this.errorListener = null;
+}
+
+Queue.prototype.processNext = function () {
+
+    while (
+        this.running < this.concurrency &&
+        this.queue.length > 0
+    ) {
+
+        const task = this.queue.shift();
+
+        this.running++;
+
+        this.processorFn(task, (data, error) => {
+
+            this.running--;
+
+            this.onCompleteFn(data, error, task);
+
+            if (error && this.errorListener) {
+                this.errorListener(error, task);
+            }
+
+            this.processNext();
+
+            if (
+                this.running === 0 &&
+                this.queue.length === 0 &&
+                this.drainListener
+            ) {
+                this.drainListener();
+            }
+        });
+    }
+};
+
+Queue.prototype.push = function (tasks) {
+
+    if (!Array.isArray(tasks)) {
+        tasks = [tasks];
+    }
+
+    this.queue.push(...tasks);
+
+    this.processNext();
+};
+
+Queue.prototype.unshift = function (tasks) {
+
+    if (!Array.isArray(tasks)) {
+        tasks = [tasks];
+    }
+
+    this.queue.unshift(...tasks);
+
+    this.processNext();
+};
+
+Queue.prototype.drain = function (callback) {
+    this.drainListener = callback;
+};
+
+Queue.prototype.error = function (callback) {
+    this.errorListener = callback;
+};
+
+
+/* INPUT */
+// Update this to become promisified
+const processorFn = (task, callback) => {
+    setTimeout(() => {
+      console.log('Processing task ' + task.name);
+      callback(`${task.name} done`);
+	// Use in follow up for error scenario implementation
+	/* 
+	const errorRnd = Math.random() < 0.1;
+	if(errorRnd) {
+		callback(null, `${task.name} error`);
+      }
+      */
+
+    }, 500);
+}
+
+const onCompleteFn = (data, error, task) => {
+    console.log('Task has completed processing: ', task.name, error, Date.now());
+}
+
+const myQueue = new Queue(processorFn, onCompleteFn, 2);
+
+// add some items to the queue
+myQueue.push({name: 'foo'});
+
+// add some items to the queue (batch-wise)
+myQueue.push([{name: 'baz'},{name: 'bay'},{name: 'bax'}]);
+
+// Add items after a certain timeout
+setTimeout(() => {
+  myQueue.push([{name: 'x'}, {name: 'y'}, {name: 'z'}, {name: 'w'} ]);
+}, 600);
+
+// assign a listener when the queue does not have any pending items
+myQueue.drain(function() {
+    console.log('all items have been processed');
+});
+
+// assign an error listener
+myQueue.error(function(err, task) {
+    console.error('task experienced an error', err, task);
+});
+
+// FOLLOW UP: add some items to the front of the queue
+// myQueue.unshift({name: 'bar'});
+
+// OUTPUT
+// "Processing task foo"
+// "Task has completed processing: ", "foo", undefined, 1784370243236
+// "Processing task baz"
+// "Task has completed processing: ", "baz", undefined, 1784370243236
+// "Processing task bay"
+// "Task has completed processing: ", "bay", undefined, 1784370243753
+// "Processing task bax"
+// "Task has completed processing: ", "bax", undefined, 1784370243753
+// "Processing task x"
+// "Task has completed processing: ", "x", undefined, 1784370244269
+// "Processing task y"
+// "Task has completed processing: ", "y", undefined, 1784370244269
+// "Processing task z"
+// "Task has completed processing: ", "z", undefined, 1784370244771
+// "Processing task w"
+// "Task has completed processing: ", "w", undefined, 1784370244771
+// "all items have been processed"
+
+
+
+/* --------------------------------------------------
+   34. PUBLISHER SUBSCRIBER - PART 1
+     Create a simple Observable class that implements the observer pattern. The class should:
+
+      Allow subscribing to data changes via a subscribe method
+      Notify all subscribers when data changes via a notify method
+      Allow unsubscribing from updates
+      Maintain a list of subscriber callbacks
+  -------------------------------------------------- 
+*/
+
+// Observable implements the Publisher-Subscriber (Observer) pattern
+class Observable {
+  constructor() {
+    // Stores all subscriber callbacks
+    this.subscribers = [];
+  }
+
+  // Register a new subscriber
+  subscribe(callback) {
+    // Save the callback
+    this.subscribers.push(callback);
+
+    // Return a subscription object
+    // so caller can unsubscribe later
+    return {
+      unsubscribe: () => {
+        // Remove only this callback
+        this.subscribers = this.subscribers.filter(
+          subscriber => subscriber !== callback
+        );
+      }
+    };
+  }
+
+  // Notify every subscriber with new data
+  notify(data) {
+    this.subscribers.forEach(callback => callback(data));
+  }
+}
+
+// ------------------------------
+// Example
+// ------------------------------
+
+const observable = new Observable();
+
+// Subscriber 1
+const subscription1 = observable.subscribe((data) => {
+  console.log("Subscriber 1:", data);
+});
+
+// Subscriber 2
+const subscription2 = observable.subscribe((data) => {
+  console.log("Subscriber 2:", data);
+});
+
+// Notify all subscribers
+observable.notify("Hello!");
+
+/*
+Output:
+Subscriber 1: Hello!
+Subscriber 2: Hello!
+*/
+
+// Remove first subscriber
+subscription1.unsubscribe();
+
+// Notify again
+observable.notify("Hello again!");
+
+/*
+Output:
+Subscriber 2: Hello again!
+*/
+
+// Remove second subscriber
+subscription2.unsubscribe();
+
+// No subscribers left
+observable.notify("Nobody receives this");
+
+/*
+Output:
+(nothing)
+*/
+
+
+/* --------------------------------------------------
+   35. PUBLISHER SUBSCRIBER - PART 2
+
+     Implement the pub-sub pattern in JavaScript that has following methods: subscribe, subscribeOnce, and subscribeOnceAsync
+
+    subscribe(name, callback): Will take the name of the event and assign a callback to it. This callback will be invoked when the event is published. It returns a remove() method to unsubscribe the event.
+    subscribeOnce(name, callback): Will take the name of the event and assign a callback to it. This event will be published only once.
+    subscribeOnceAsync(name): Will take the name of the event and returns a promise that is settled or fullfilled when the event is published.
+    publish(name, data): Publish a single event and pass the data to the callback of each events. If the event is subscribed only once, it should not invoke twice.
+    publishAll(name): Publishes all events and passes the data to the callback of each events. If the event is subscribed only once, it should not invoke twice.
+  -------------------------------------------------- 
+*/
+
+class PubSub {
+  constructor() {
+    // Stores listeners for every event
+    // {
+    //   eventName: [{ callback, once }]
+    // }
+    this.events = {};
+  }
+
+  // --------------------------------------------------
+  // Subscribe to an event
+  // --------------------------------------------------
+  subscribe(name, callback) {
+
+    if (!this.events[name]) {
+      this.events[name] = [];
+    }
+
+    this.events[name].push({
+      callback,
+      once: false
+    });
+
+    // Return remove() API
+    return {
+      remove: () => {
+        this.events[name] = this.events[name].filter(
+          listener => listener.callback !== callback
+        );
+      }
+    };
+  }
+
+  // --------------------------------------------------
+  // Subscribe only once
+  // --------------------------------------------------
+  subscribeOnce(name, callback) {
+
+    if (!this.events[name]) {
+      this.events[name] = [];
+    }
+
+    this.events[name].push({
+      callback,
+      once: true
+    });
+  }
+
+  // --------------------------------------------------
+  // Promise resolves on first publish
+  // --------------------------------------------------
+  subscribeOnceAsync(name) {
+
+    return new Promise(resolve => {
+
+      this.subscribeOnce(name, resolve);
+
+    });
+  }
+
+  // --------------------------------------------------
+  // Publish a single event
+  // --------------------------------------------------
+  publish(name, data) {
+
+    if (!this.events[name]) return;
+
+    this.events[name] = this.events[name].filter(listener => {
+
+      listener.callback(data);
+
+      // Keep only non-once listeners
+      return !listener.once;
+    });
+  }
+
+  // --------------------------------------------------
+  // Publish all registered events
+  // --------------------------------------------------
+  publishAll(data) {
+
+    for (const eventName in this.events) {
+
+      this.publish(eventName, data);
+
+    }
+  }
+}
+
+const events = new PubSub();
+
+const newUserNewsSubscription = events.subscribe("new-user", function (payload) {
+  console.log(`Sending Q1 News to: ${payload}`);
+});
+
+events.publish("new-user", "Jhon");
+
+//output: "Sending Q1 News to: Jhon"
+
+const newUserNewsSubscription2 = events.subscribe("new-user", function (payload) {
+  console.log(`Sending Q2 News to: ${payload}`);
+});
+
+events.publish("new-user", "Doe");
+
+//output: "Sending Q1 News to: Doe"
+//output: "Sending Q2 News to: Doe"
+
+newUserNewsSubscription.remove(); // Q1 news is removed
+
+events.publish("new-user", "Foo");
+//output: "Sending Q2 News to: Foo"
+
+events.publishAll("FooBar");
+//output: "Sending Q2 News to: FooBar"
+
+events.subscribeOnce("new-user", function (payload) {
+  console.log(`I am invoked once ${payload}`);
+});
+
+events.publish("new-user", "Foo Once");
+//output: "Sending Q2 News to: Foo Once" - normal event
+//output: "I am invoked once Foo Once" - once event
+
+events.publish("new-user", "Foo Twice");
+//output: "Sending Q2 News to: Foo Twice" - normal event
+// once event should not invoke for second time
+
+
+events.subscribeOnceAsync("new-user").then(function (payload) {
+  console.log(`I am invoked once ${payload}`);
+});
+
+events.publish("new-user", "Foo Once Async");
+//output: "Sending Q2 News to: Foo Once Async"
+//output: "I am invoked once Foo Once Async"
+
+
+
+/* --------------------------------------------------
+   35. CREATE COMPOSE ASYNC FUNCTION WITH CHAINING SUPPORT
+  -------------------------------------------------- 
+*/
+
+function composeAsync(...functions) {
+
+  // Return a function that accepts the arguments
+  // for the right-most function
+  return function (...args) {
+
+    // Execute the last function first
+    let promise = Promise.resolve(
+      functions[functions.length - 1](...args)
+    );
+
+    // Chain remaining functions from right → left
+    for (let i = functions.length - 2; i >= 0; i--) {
+
+      promise = promise.then(result => {
+        return functions[i](result);
+      });
+
+    }
+
+    return promise;
+  };
+}
+
+function a(x, y) {
+  return new Promise(resolve => setTimeout(() => resolve(x * y), 100));
+}
+
+function b(z) {
+  return new Promise((resolve, reject) => setTimeout(() => resolve(z + 5), 100));
+}
+
+function c(r) {
+  return new Promise(resolve => setTimeout(() => resolve(r / 10), 100));
+}
+
+// create this function
+composeAsync(c, b, a)(5, 3).then(result => { console.log(result); }).catch(console.error);
+
+
+
+/* --------------------------------------------------
+   36. IMPLEMENT MAP DATA STRUCTURE WITH EVENT LISTENER
+
+        Storage for key-value pairs. Override value for same key.
+        Event listeners that trigger when values change.
+        Support for both change:key and key event formats on listener.
+  -------------------------------------------------- 
+*/
+
+class StoreData {
+  constructor() {
+    // Stores key-value pairs
+    this.store = new Map();
+
+    // Stores event listeners
+    // {
+    //   "change:name": [fn1, fn2],
+    //   "age": [fn3]
+    // }
+    this.listeners = new Map();
+  }
+
+  // -----------------------------
+  // Add / Update a value
+  // -----------------------------
+  add(key, value) {
+    const oldValue = this.store.get(key);
+
+    // Save latest value
+    this.store.set(key, value);
+
+    // Trigger listeners only if value actually changed
+    if (oldValue !== value) {
+      this.emit(`change:${key}`, oldValue, value, key);
+      this.emit(key, oldValue, value, key);
+    }
+  }
+
+  // -----------------------------
+  // Check whether key exists
+  // -----------------------------
+  has(key) {
+    return this.store.has(key);
+  }
+
+  // -----------------------------
+  // Register an event listener
+  // -----------------------------
+  on(eventName, callback) {
+    if (!this.listeners.has(eventName)) {
+      this.listeners.set(eventName, []);
+    }
+
+    this.listeners.get(eventName).push(callback);
+  }
+
+  // -----------------------------
+  // Notify all listeners
+  // -----------------------------
+  emit(eventName, oldValue, newValue, key) {
+    if (!this.listeners.has(eventName)) return;
+
+    for (const callback of this.listeners.get(eventName)) {
+      callback(oldValue, newValue, key);
+    }
+  }
+}
+
+
+const store = new StoreData();
+
+store.add("name", "joe");
+store.add("age", 30);
+
+console.log(store.has("age"));     // true
+console.log(store.has("animal"));  // false
+
+store.add("name", "emma");
+
+store.on("change:name", (oldVal, newVal, key) => {
+  console.log(`old ${key}: ${oldVal}, new ${key}: ${newVal}`); // "old name: emma, new name: john"
+});
+
+store.add("name", "john");
+
+store.on("age", (oldVal, newVal, key) => {
+  console.log(`old ${key}: ${oldVal}, new ${key}: ${newVal}`); // "old age: 30, new age: 50"
+});
+
+store.add("age", 50);
+
+store.on("change:age", (oldVal, newVal) => {
+  if (oldVal > newVal) {
+    console.log("older now");
+  }
+});
+
+store.add("age", 28); // "old age: 50, new age: 28"
+store.add("age", 45); // "old age: 28, new age: 45"
+
+
+
+/* --------------------------------------------------
+   37. CURRYING (1 TO 5)
+  -------------------------------------------------- 
+*/
+
+// ---------------------------------------------------------
+// CURRYING - PART 1
+// ---------------------------------------------------------
+
+/*
+Goal:
+Keep accumulating values across multiple calls.
+
+sum(5); // 5
+sum(3); // 8
+sum(4); // 12
+sum(0); // 12
+
+Unlike traditional currying, this returns the
+current accumulated sum after every invocation.
+*/
+
+function curry() {
+
+  // Private state (closure)
+  let total = 0;
+
+  // Returned function remembers 'total'
+  return function (num) {
+
+    // Update accumulated value
+    total += num;
+
+    // Return current total
+    return total;
+  };
+}
+
+const sum = curry();
+
+console.log(sum(5)); // 5
+console.log(sum(3)); // 8
+console.log(sum(4)); // 12
+console.log(sum(0)); // 12
+
+
+// ---------------------------------------------------------
+// CURRYING - PART 2 (Infinite Currying using valueOf)
+// ---------------------------------------------------------
+
+/*
+Goal
+
+sum(1)(2)(3) + 0
+// 6
+
+OR
+
+Number(sum(1)(2)(3))
+// 6
+
+JavaScript automatically calls valueOf()
+when converting an object/function into a number.
+*/
+
+function curry(initial = 0) {
+
+  let total = initial;
+
+  function curried(num) {
+
+    total += num;
+
+    return curried;
+  }
+
+  // Implicit conversion
+  curried.valueOf = function () {
+    return total;
+  };
+
+  curried.toString = function () {
+    return String(total);
+  };
+
+  return curried;
+}
+
+console.log(+curry(1)(2)(3));      // 6
+console.log(Number(curry(5)(5)));  // 10
+
+
+// ---------------------------------------------------------
+// CURRYING - PART 3 (Infinite Currying with Empty Call)
+// ---------------------------------------------------------
+
+/*
+Goal
+
+sum(1)(2)(3)() // 6
+
+Empty call terminates the chain.
+*/
+
+function curry(total = 0) {
+
+  return function curried(num) {
+
+    // Empty call
+    if (num === undefined) {
+      return total;
+    }
+
+    return curry(total + num);
+  };
+}
+
+console.log(curry(1)(2)(3)()); // 6
+console.log(curry(5)(10)(20)()); // 35
+
+
+// ---------------------------------------------------------
+// CURRYING - PART 4 (GENERIC CURRY)
+// ---------------------------------------------------------
+
+/*
+Goal
+
+Convert any function into a curried version.
+
+Stops once enough arguments are collected.
+
+Uses fn.length (arity).
+*/
+
+function curry(fn) {
+
+  return function curried(...args) {
+
+    // Enough arguments collected
+    if (args.length >= fn.length) {
+      return fn(...args);
+    }
+
+    // Otherwise collect more
+    return function (...nextArgs) {
+      return curried(...args, ...nextArgs);
+    };
+  };
+}
+
+// Original function
+function sum(a, b, c, d) {
+  return a + b + c + d;
+}
+
+const curriedSum = curry(sum);
+
+console.log(curriedSum(1)(2)(3)(4)); // 10
+
+
+
+// ---------------------------------------------------------
+// CURRYING - PART 5 (Generic Curry with Multiple Arguments)
+// ---------------------------------------------------------
+
+/*
+Supports
+
+curried(1,2,3,4)
+curried(1)(2,3)(4)
+curried(1)(2)(3)(4)
+
+Extra arguments are ignored because
+JavaScript ignores arguments beyond function arity.
+*/
+
+function curry(fn) {
+
+  function curried(...args) {
+
+    // Enough arguments
+    if (args.length >= fn.length) {
+      return fn(...args);
+    }
+
+    // Collect remaining arguments
+    return (...nextArgs) => {
+
+      return curried(...args, ...nextArgs);
+
+    };
+  }
+
+  return curried;
+}
+
+function sum(a, b, c, d) {
+  return a + b + c + d;
+}
+
+const curriedSum = curry(sum);
+
+console.log(curriedSum(1, 2, 3, 4, 5)); // 10
+console.log(curriedSum(1)(2, 3)(4, 5)); // 10
+console.log(curriedSum(1)(2)(3)(4)); // 10
+console.log(curriedSum(1, 2)(3, 4)); // 10
+console.log(curriedSum(1)(2, 3, 4)); // 10
