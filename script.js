@@ -3841,38 +3841,63 @@ store.add("age", 45); // "old age: 28, new age: 45"
 
 /* --------------------------------------------------
    37. CURRYING (1 TO 5)
+
+    Currying is the process of transforming a function that
+    takes multiple arguments into a sequence of functions,
+    each taking one (or more) arguments.
+
+    Normal
+
+    sum(1,2,3)
+
+    Curried
+
+    sum(1)(2)(3)
+
+    Benefits
+
+    • Partial application
+    • Function reuse
+    • Better composition
+    • Delayed execution
   -------------------------------------------------- 
 */
 
 // ---------------------------------------------------------
-// CURRYING - PART 1
+// CURRYING - PART 1 (Closure based accumulator & NOT True Currying)
 // ---------------------------------------------------------
 
 /*
-Goal:
-Keep accumulating values across multiple calls.
+----------------------------------------------------------
+PART 1
 
-sum(5); // 5
-sum(3); // 8
-sum(4); // 12
-sum(0); // 12
+This is NOT true currying.
 
-Unlike traditional currying, this returns the
-current accumulated sum after every invocation.
+It is a closure that keeps remembering the previous value.
+
+sum(5) -> 5
+sum(3) -> 8
+sum(4) -> 12
+
+The returned function has access to "total"
+even after curry() has finished executing.
+----------------------------------------------------------
 */
 
 function curry() {
 
-  // Private state (closure)
+  // Private variable.
+  // Only the returned function can access or modify it.
   let total = 0;
 
-  // Returned function remembers 'total'
+  // Returning a function creates a closure.
+  // The closure remembers "total".
   return function (num) {
 
-    // Update accumulated value
+    // Add current value
     total += num;
 
-    // Return current total
+    // Return latest accumulated value
     return total;
   };
 }
@@ -3890,36 +3915,49 @@ console.log(sum(0)); // 12
 // ---------------------------------------------------------
 
 /*
-Goal
+----------------------------------------------------------
+PART 2
 
-sum(1)(2)(3) + 0
-// 6
+Infinite Currying
 
-OR
+curry(1)(2)(3)
 
-Number(sum(1)(2)(3))
-// 6
+Each call returns the SAME function,
+allowing unlimited chaining.
 
-JavaScript automatically calls valueOf()
-when converting an object/function into a number.
+The chain ends only when JavaScript converts
+the function into a primitive.
+
+Number(...)
+Unary +
+Comparison
+Arithmetic
+
+During conversion JavaScript first calls valueOf().
+----------------------------------------------------------
 */
 
 function curry(initial = 0) {
 
+  // Closure variable storing running total
   let total = initial;
 
   function curried(num) {
 
+    // Update total
     total += num;
 
+    // Return same function
+    // so chaining can continue forever.
     return curried;
   }
 
-  // Implicit conversion
+  // Called automatically during numeric conversion.
   curried.valueOf = function () {
     return total;
   };
 
+  // Called during string conversion.
   curried.toString = function () {
     return String(total);
   };
@@ -3927,8 +3965,9 @@ function curry(initial = 0) {
   return curried;
 }
 
-console.log(+curry(1)(2)(3));      // 6
-console.log(Number(curry(5)(5)));  // 10
+console.log(+curry(1)(2)(3));     // 6
+console.log(Number(curry(5)(5))); // 10
+
 
 
 // ---------------------------------------------------------
@@ -3936,28 +3975,44 @@ console.log(Number(curry(5)(5)));  // 10
 // ---------------------------------------------------------
 
 /*
-Goal
+----------------------------------------------------------
+PART 3
 
-sum(1)(2)(3)() // 6
+Chain ends with an empty call.
 
-Empty call terminates the chain.
+curry(1)(2)(3)()
+
+Instead of waiting for valueOf(),
+we explicitly stop the recursion
+when no argument is passed.
+----------------------------------------------------------
 */
 
 function curry(total = 0) {
 
+  // Every recursive call creates a NEW closure
+  // containing the updated total.
   return function curried(num) {
 
-    // Empty call
+    // Empty call means stop recursion.
     if (num === undefined) {
       return total;
     }
 
+    // Return a NEW curried function
+    // with updated total.
+    //
+    // Example:
+    //
+    // curry(1)
+    // -> curry(3)
+    // -> curry(6)
+    //
     return curry(total + num);
   };
 }
 
 console.log(curry(1)(2)(3)()); // 6
-console.log(curry(5)(10)(20)()); // 35
 
 
 // ---------------------------------------------------------
@@ -3965,39 +4020,73 @@ console.log(curry(5)(10)(20)()); // 35
 // ---------------------------------------------------------
 
 /*
-Goal
+----------------------------------------------------------
+PART 4
 
-Convert any function into a curried version.
+Generic Curry
 
-Stops once enough arguments are collected.
+Turns ANY function into a curried version.
 
-Uses fn.length (arity).
+Example
+
+sum(a,b,c,d)
+
+becomes
+
+sum(1)(2)(3)(4)
+
+The function executes only after
+all required arguments have been collected.
+
+How do we know?
+
+fn.length
+
+returns the number of declared parameters.
+----------------------------------------------------------
 */
 
 function curry(fn) {
 
-  return function curried(...args) {
+  function curried(...args) {
 
-    // Enough arguments collected
+    // args contains every argument collected so far.
+
+    // If enough arguments have been collected,
+    // execute the original function.
     if (args.length >= fn.length) {
       return fn(...args);
     }
 
-    // Otherwise collect more
+    // Otherwise return another function
+    // to collect remaining arguments.
     return function (...nextArgs) {
+
+      // Merge old and new arguments.
+
+      // Example
+
+      // args = [1]
+      // nextArgs = [2]
+
+      // becomes
+
+      // [1,2]
+
       return curried(...args, ...nextArgs);
     };
-  };
+  }
+
+  return curried;
 }
 
-// Original function
 function sum(a, b, c, d) {
   return a + b + c + d;
 }
 
 const curriedSum = curry(sum);
 
-console.log(curriedSum(1)(2)(3)(4)); // 10
+console.log(curriedSum(1)(2)(3)(4));
 
 
 
@@ -4006,44 +4095,61 @@ console.log(curriedSum(1)(2)(3)(4)); // 10
 // ---------------------------------------------------------
 
 /*
-Supports
+----------------------------------------------------------
+PART 5
+
+Supports every possible combination.
 
 curried(1,2,3,4)
+
 curried(1)(2,3)(4)
+
 curried(1)(2)(3)(4)
 
-Extra arguments are ignored because
-JavaScript ignores arguments beyond function arity.
+Each invocation collects more arguments.
+
+Eventually the total number of collected
+arguments becomes equal to fn.length.
+
+At that point the original function executes.
+----------------------------------------------------------
 */
 
 function curry(fn) {
 
   function curried(...args) {
 
-    // Enough arguments
+    // Have we collected enough arguments?
     if (args.length >= fn.length) {
+
+      // Execute original function.
+
+      // Extra arguments are ignored because
+      // JavaScript ignores arguments beyond
+      // declared parameters.
+
       return fn(...args);
     }
 
-    // Collect remaining arguments
+    // Need more arguments.
+
     return (...nextArgs) => {
 
-      return curried(...args, ...nextArgs);
+      // Merge previously collected arguments
+      // with newly received arguments.
 
+      // Example
+
+      // args = [1,2]
+      // nextArgs = [3]
+
+      // becomes
+
+      // [1,2,3]
+
+      return curried(...args, ...nextArgs);
     };
   }
 
   return curried;
 }
-
-function sum(a, b, c, d) {
-  return a + b + c + d;
-}
-
-const curriedSum = curry(sum);
-
-console.log(curriedSum(1, 2, 3, 4, 5)); // 10
-console.log(curriedSum(1)(2, 3)(4, 5)); // 10
-console.log(curriedSum(1)(2)(3)(4)); // 10
-console.log(curriedSum(1, 2)(3, 4)); // 10
-console.log(curriedSum(1)(2, 3, 4)); // 10
