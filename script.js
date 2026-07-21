@@ -4,7 +4,7 @@
 // contains a user ID, a duration, and an array of equipment used
 // during that activity.
 //
-// Your task is to:
+// Your task is to:3
 // 1️⃣ Group the data by user
 // 2️⃣ Remove duplicate entries inside each user's equipment list
 // 3️⃣ Sum up the total duration of all activities for each user
@@ -26,7 +26,16 @@ const activities = [
 // --------------------------------------------------------------
 // ✅ Step 1: Group data by user and calculate total duration
 // --------------------------------------------------------------
+
 const grouped = activities.reduce((map, { user, duration, equipment }) => {
+//   Map {
+//    8 =>
+//       {
+//
+//         totalDuration:0,
+//         equipments:Set {}
+//       }
+// }
   // Initialize user entry if not present
   if (!map.has(user)) {
     map.set(user, { totalDuration: 0, equipments: new Set() });
@@ -101,7 +110,7 @@ function myFlatArray() {
       // Recursively call myFlatArray on the nested array
       let result = currentElement.myFlatArray();
       // Merge the result into the final flattened array
-      finalFlattenArray = [...finalFlattenArray, ...result];
+      finalFlattenArray.push(...result);
     } else {
       // If not an array (primitive value), directly push into result
       finalFlattenArray.push(currentElement);
@@ -180,48 +189,69 @@ console.log(arr.myFlatArray(3));
 // prefix  → keeps track of the key path (used for recursion)
 // result  → accumulator object that stores final flattened output
 const flattenObject = (obj, prefix = "", result = {}) => {
-  // Loop through all enumerable keys in the object
-  // `for...in` iterates over own + inherited properties
-  for (const key in obj) {
-    // hasOwnProperty check ensures:
-    // - We only process properties that belong directly to the object
-    // - We skip properties coming from prototype chain
-    // Example:
-    //   obj.__proto__.toString → ignored
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
-      // Construct the new flattened key
-      // If prefix exists → combine prefix + current key
-      // Else → use current key as root
-      // Example:
-      //   address + street → address_street
-      const newKey = prefix ? `${prefix}_${key}` : key;
+  // Object.entries() returns only own enumerable properties.
+  // Avoids using hasOwnProperty() inside the loop.
+  // [
+  //   ["name", "John"], const [key, value] = ["name", "John"];
+  //   ["age", 25]
+  // ]
+  // Object.entries() return Each element is an array of two values.
+  for (const [key, value] of Object.entries(obj)) {
 
-      // Check if the current value is an array
-      if (Array.isArray(obj[key])) {
-        // Iterate over each item in the array
-        obj[key].forEach((item, index) => {
-          // Recursively flatten each array element
-          // Index is appended to preserve array position
-          // Example:
-          //   phones_0_type
-          flattenObject(item, `${newKey}_${index}`, result);
-        });
-      }
-      // Check if the value is a non-null object
-      // (typeof null === "object" → must be excluded)
-      else if (typeof obj[key] === "object" && obj[key] !== null) {
-        // Recursively flatten nested object
-        flattenObject(obj[key], newKey, result);
-      }
-      // Base case: primitive value (string, number, boolean, null)
-      else {
-        // Store the primitive value using the flattened key
-        result[newKey] = obj[key];
-      }
+    // Build the current key path.
+    // "" + name          -> name
+    // address + city     -> address_city
+    // phones_0 + type    -> phones_0_type
+    const newKey = prefix ? `${prefix}_${key}` : key;
+
+    // ==========================
+    // CASE 1: Value is an Array
+    // ==========================
+    if (Array.isArray(value)) {
+
+      value.forEach((item, index) => {
+
+        // Preserve array index in flattened key.
+        // Example:
+        // phones_0
+        // phones_1
+        const arrayKey = `${newKey}_${index}`;
+
+        // Array item is another object/array
+        // Recurse deeper.
+        if (item !== null && typeof item === "object") {
+          flattenObject(item, arrayKey, result);
+        }
+        // Array item is primitive
+        // Store directly.
+        else {
+          result[arrayKey] = item;
+        }
+      });
+    }
+
+    // ==========================
+    // CASE 2: Nested Object
+    // ==========================
+    else if (value !== null && typeof value === "object") {
+
+      // Continue building the key path.
+      flattenObject(value, newKey, result);
+    }
+
+    // ==========================
+    // CASE 3: Primitive Value
+    // ==========================
+    else {
+
+      // Base case of recursion.
+      // Store the final flattened key-value pair.
+      result[newKey] = value;
     }
   }
 
-  // Return the accumulated flattened result
+  // Same result object is shared across recursive calls,
+  // avoiding unnecessary object creation.
   return result;
 };
 
@@ -289,30 +319,40 @@ let data = {
 
 // Function to sum all numeric values in a deeply nested object
 const sumDeepObject = (obj) => {
-  let sum = 0; // Holds total sum
+  // Accumulates the sum for the current object level.
+  let sum = 0;
 
-  // Loop through all keys in the object
-  for (const key in obj) {
-    // Ensure property belongs directly to the object
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
-      const value = obj[key];
+  // Object.values() returns only the object's own values.
+  // No need for hasOwnProperty().
+  for (const value of Object.values(obj)) {
 
-      // If value is a number, add it to sum
-      if (typeof value === "number") {
-        sum += value;
-      }
-
-      // If value is a non-null object, recurse
-      else if (typeof value === "object" && value !== null) {
-        sum += sumDeepObject(value);
-      }
-
-      // Ignore strings, null, booleans, etc.
+    // ==========================
+    // CASE 1: Primitive Number
+    // ==========================
+    if (typeof value === "number") {
+      // Add number directly to the running total.
+      sum += value;
     }
+
+    // ==========================
+    // CASE 2: Nested Object
+    // ==========================
+    else if (value !== null && typeof value === "object") {
+      // Recursively sum all numbers inside the nested object
+      // and add them to the current sum.
+      sum += sumDeepObject(value);
+    }
+
+    // ==========================
+    // CASE 3: Ignore Everything Else
+    // ==========================
+    // Strings, booleans, undefined, functions, etc.
   }
 
-  return sum; // Return accumulated sum
+  // Return the total sum for this object level.
+  return sum;
 };
+
 
 console.log(sumDeepObject(data)); // 3
 
