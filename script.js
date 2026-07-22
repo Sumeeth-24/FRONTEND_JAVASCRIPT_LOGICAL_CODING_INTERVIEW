@@ -383,22 +383,14 @@ function deepFilter(collection, callback) {
     throw new TypeError("Invalid callback");
   }
 
-  // ✅ Result object
-  // This will store the filtered output
+  // 📦 Create a fresh object.
+  // We'll build a new filtered version instead of mutating the original.
   const result = {};
 
-  // 🔁 Iterate over all enumerable keys in the object
-  for (const key in collection) {
-    // ⚠️ SAFETY CHECK #3
-    // Ensures we only access object's own properties
-    // Prevents prototype pollution issues
-    if (!Object.prototype.hasOwnProperty.call(collection, key)) {
-      continue;
-    }
-
-    // 📦 Extract current value
-    const value = collection[key];
-
+  // 🔁 Iterate over all own enumerable key-value pairs in the object.
+  // Object.entries() automatically skips inherited properties,
+  // so no hasOwnProperty() check is needed.
+  for (const [key, value] of Object.entries(collection)) {
     // 🔍 CASE 1: If value is a nested object
     if (typeof value === "object" && value !== null && !Array.isArray(value)) {
       // 🔁 Recursively filter the nested object
@@ -406,6 +398,7 @@ function deepFilter(collection, callback) {
 
       // ✅ Keep the object ONLY if it has valid keys left
       // This avoids returning empty objects
+      //
       // b: {
       //   c: -2,
       //   d: 3
@@ -414,8 +407,8 @@ function deepFilter(collection, callback) {
       // 2️⃣ filteredChild = { d: 3 }
       // 3️⃣ Object.keys(filteredChild) → ["d"]
       // 4️⃣ length is 1 → ✅ keep b
-
-      //   b: {
+      //
+      // b: {
       //   c: -2,
       //   d: -3
       // }
@@ -438,7 +431,6 @@ function deepFilter(collection, callback) {
     }
   }
 
-  // ✅ Return final filtered object
   return result;
 }
 
@@ -542,24 +534,27 @@ export default function deepEqual(value1, value2) {
     return true; // If all elements match, arrays are deeply equal
   }
 
-  // Step 4: Get object keys and compare their lengths
-  const keys1 = Object.keys(value1);
-  const keys2 = Object.keys(value2);
+  // Step 4: Get all own enumerable key-value pairs
+    const entries1 = Object.entries(value1);
+    const entries2 = Object.entries(value2);
 
-  if (keys1.length !== keys2.length) {
-    return false; // If the number of keys differ, they are not equal
-  }
-
-  // Step 5: Compare objects property by property
-  for (let key of keys1) {
-    if (!Object.prototype.hasOwnProperty.call(value2, key)) {
-      return false; // If `value2` does not have the same key, return false
+    // If the number of own properties differ, objects cannot be equal
+    if (entries1.length !== entries2.length) {
+      return false;
     }
 
-    if (!deepEqual(value1[key], value2[key])) {
-      return false; // Recursively compare values
+    // Step 5: Compare each property recursively
+    for (const [key, value] of entries1) {
+      // Ensure value2 has the same own property
+      if (!Object.hasOwn(value2, key)) {
+        return false;
+      }
+
+      // Recursively compare the property values
+      if (!deepEqual(value, value2[key])) {
+        return false;
+      }
     }
-  }
 
   return true; // If all checks pass, the objects are deeply equal
 }
@@ -570,67 +565,90 @@ export default function deepEqual(value1, value2) {
 // --------------------------------------------------------------
 
 export default function deepMap(value, fn) {
-  return mapHelper(value, fn, value); // Calls recursive helper function with the original value passed as `this`
+  // Start the recursive traversal.
+  // Pass the original value so it becomes the `this` context
+  // when invoking the callback.
+  return deepMapHelper(value, fn, value);
 }
 
 // Function to check if a given value is a "plain object"
-// A "plain object" is an object that is either created using `{}` or `new Object()`, 
-// but NOT instances of classes, arrays, or special objects like `RegExp`
-// isPlainObject({}) // ✅ true
-// isPlainObject(new Object()) // ✅ true
-// isPlainObject([]) // ❌ false
-// isPlainObject(new Date()) // ❌ false
-// isPlainObject(null) // ❌ false
+// A "plain object" is an object created using `{}`, `new Object()`,
+// or `Object.create(null)`.
+//
+// isPlainObject({})                // ✅ true
+// isPlainObject(new Object())      // ✅ true
+// isPlainObject(Object.create(null)) // ✅ true
+// isPlainObject([])                // ❌ false
+// isPlainObject(new Date())        // ❌ false
+// isPlainObject(/abc/)             // ❌ false
+// isPlainObject(null)              // ❌ false
+// isPlainObject(42)                // ❌ false
 
 function isPlainObject(value) {
-  if (value === null || value === undefined) {
-    return false; // Null and undefined are not objects
+  // Null, undefined, and primitives are not plain objects.
+  if (value == null || typeof value !== "object") {
+    return false;
   }
 
-  const prototype = Object.getPrototypeOf(value); // Get the prototype of the object
+  // Get the object's prototype.
+  const prototype = Object.getPrototypeOf(value);
 
-  // The object is "plain" if its prototype is either `null` (Object.create(null)) 
-  // or `Object.prototype` (default JS objects)
-  return prototype === null || prototype === Object.prototype;
+  // Plain objects have either:
+  // 1. Object.prototype (normal objects)
+  // 2. null (Object.create(null))
+  return prototype === Object.prototype || prototype === null;
 }
 
-// Recursive function to apply transformation
-function mapHelper(element, fn, original) {
-  // Step 1: Check if the element is an array
-  if (Array.isArray(element)) {
-    const mappedArray = []; // Create a new array to store transformed elements
-
-    for (let i = 0; i < element.length; i++) {
-      mappedArray.push(mapHelper(element[i], fn, original)); // Recursively process each element
-    }
-
-    return mappedArray; // Return the new transformed array
+// Recursive helper function
+function deepMapHelper(value, fn, original) {
+  // ----------------------------------------------------------
+  // CASE 1: Arrays
+  // ----------------------------------------------------------
+  // Recursively map every array element.
+  if (Array.isArray(value)) {
+    return value.map(item => deepMapHelper(item, fn, original));
   }
 
-  // Step 2: Check if the element is a plain object (not an array or special object)
-  if (isPlainObject(element)) {
-    const mappedObject = {}; // Create a new object to store transformed properties
+  // ----------------------------------------------------------
+  // CASE 2: Plain Objects
+  // ----------------------------------------------------------
+  // Recursively map every property value.
+  if (isPlainObject(value)) {
+    const mappedObject = {};
 
-    for (const key in element) {
-      if (Object.prototype.hasOwnProperty.call(element, key)) {
-        mappedObject[key] = mapHelper(element[key], fn, original); // Recursively process object values
-      }
+    // Object.entries() returns only the object's own enumerable
+    // key-value pairs, so no hasOwnProperty() check is required.
+    for (const [key, child] of Object.entries(value)) {
+      mappedObject[key] = deepMapHelper(child, fn, original);
     }
 
-    return mappedObject; // Return the transformed object
+    return mappedObject;
   }
 
-  // Step 3: If the element is not an object or array, apply the transformation function
-  return fn.call(original, element);
+  // ----------------------------------------------------------
+  // CASE 3: Primitive values / Special objects
+  // ----------------------------------------------------------
+  // Apply the callback to leaf values.
+  // fn.call(original, value) ensures `this` inside the callback
+  // refers to the original input passed to deepMap().
+  return fn.call(original, value);
 }
 
-// ------ QUESTION AND OUTPUT -------
+// --------------------------------------------------------------
+// EXAMPLES
+// --------------------------------------------------------------
 
-// const double = (x) => x * 2;
+// const double = x => x * 2;
 
-// deepMap(2, double); // 4
-// deepMap([1, 2, 3], double); // [4, 5, 6]
-// deepMap({ a: 1, b: 2, c: 3 }, double); // { a: 2, b: 4, c: 6 }
+// deepMap(2, double);
+// // → 4
+
+// deepMap([1, 2, 3], double);
+// // → [2, 4, 6]
+
+// deepMap({ a: 1, b: 2, c: 3 }, double);
+// // → { a: 2, b: 4, c: 6 }
+
 // deepMap(
 //   {
 //     foo: 1,
@@ -638,7 +656,12 @@ function mapHelper(element, fn, original) {
 //     qux: { a: 5, b: 6 },
 //   },
 //   double,
-// ); // => { foo: 2, bar: [4, 6, 8], qux: { a: 10, b: 12 } }
+// );
+// → {
+//     foo: 2,
+//     bar: [4, 6, 8],
+//     qux: { a: 10, b: 12 }
+//   }
 
 
 
@@ -673,15 +696,15 @@ export default function deepMerge(valA, valB) {
   if (isPlainObject(valA) && isPlainObject(valB)) {
     const newObj = { ...valA }; // Create a new object to avoid mutating valA.
 
-    // Iterate over each key in valB.
-    for (const key in valB) {
+    // Iterate over each own enumerable property in valB.
+    for (const [key, value] of Object.entries(valB)) {
       // Check if valA also has this key (to perform a deep merge).
-      if (Object.prototype.hasOwnProperty.call(valA, key)) {
+      if (Object.hasOwn(valA, key)) {
         // Recursively merge the values of the current key.
-        newObj[key] = deepMerge(valA[key], valB[key]);
+        newObj[key] = deepMerge(valA[key], value);
       } else {
         // If valA doesn't have the key, just copy it from valB.
-        newObj[key] = valB[key];
+        newObj[key] = value;
       }
     }
     return newObj; // Return the merged object.
@@ -693,18 +716,31 @@ export default function deepMerge(valA, valB) {
 }
 
 // Function to check if a given value is a "plain object"
-// A "plain object" is an object that is either created using `{}` or `new Object()`,
-// but NOT instances of classes, arrays, or special objects like `RegExp`
+// A "plain object" is an object created using `{}`, `new Object()`,
+// or `Object.create(null)`.
+//
+// isPlainObject({})                // ✅ true
+// isPlainObject(new Object())      // ✅ true
+// isPlainObject(Object.create(null)) // ✅ true
+// isPlainObject([])                // ❌ false
+// isPlainObject(new Date())        // ❌ false
+// isPlainObject(/abc/)             // ❌ false
+// isPlainObject(null)              // ❌ false
+// isPlainObject(42)                // ❌ false
+
 function isPlainObject(value) {
-  if (value === null || value === undefined) {
-    return false; // Null and undefined are not objects
+  // Null, undefined, and primitives are not plain objects.
+  if (value == null || typeof value !== "object") {
+    return false;
   }
 
-  const prototype = Object.getPrototypeOf(value); // Get the prototype of the object
+  // Get the object's prototype.
+  const prototype = Object.getPrototypeOf(value);
 
-  // The object is "plain" if its prototype is either `null` (Object.create(null))
-  // or `Object.prototype` (default JS objects)
-  return prototype === null || prototype === Object.prototype;
+  // Plain objects have either:
+  // 1. Object.prototype (normal objects)
+  // 2. null (Object.create(null))
+  return prototype === Object.prototype || prototype === null;
 }
 
 
@@ -740,34 +776,39 @@ function isPlainObject(value) {
 // Expected Output: { a: 1, b: [ { d: 3 }, {} ] } 
 
 export default function deepOmit(obj, keys) {
-  // Base case: If obj is not an object or array, return it as is.
-  if (typeof obj !== 'object' || obj === null) {
-    return obj;
-  }
+  // Convert the array of keys into a Set for faster lookups.
+  const omitSet = new Set(keys);
 
-  // If obj is an array, recursively process each element.
-  if (Array.isArray(obj)) {
-    return obj.map(item => deepOmit(item, keys));
-  }
+  function helper(value) {
+    // Base case: If value is not an object or array, return it as is.
+    if (typeof value !== "object" || value === null) {
+      return value;
+    }
 
-  // Create a new object to store filtered properties.
-  const newObj = {};
-  
-  for (const key in obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+    // If value is an array, recursively process each element.
+    if (Array.isArray(value)) {
+      return value.map(helper);  // when the helper only needs the current item.
+    }
+
+    // Create a new object to store filtered properties.
+    const result = {};
+
+    // Iterate over all own enumerable key-value pairs.
+    for (const [key, child] of Object.entries(value)) {
       // Skip keys that need to be omitted.
-      if (keys.includes(key)) {
+      if (omitSet.has(key)) {
         continue;
       }
-      
+
       // Recursively process nested objects and arrays.
-      newObj[key] = deepOmit(obj[key], keys);
+      result[key] = helper(child);
     }
+
+    return result;
   }
 
-  return newObj;
+  return helper(obj);
 }
-
 
 
 // --------------------------------------------------------------
