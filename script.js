@@ -899,8 +899,13 @@ async function getUserData(query, searchKey, signal) {
   // Fetch with AbortSignal support
   const res = await fetch(url, { signal });
 
-  // WHY check res.ok?
-  // fetch only rejects on network error, not HTTP error
+    // WHY check res.ok?
+    //
+    // fetch() only throws on NETWORK errors.
+    // HTTP errors (404, 500, etc.) still resolve successfully.
+    //
+    // Check res.ok to convert HTTP failures into JavaScript errors
+    // so they can be handled in catch().
   if (!res.ok) {
     throw new Error(`Fetch failed: ${res.status}`);
   }
@@ -917,6 +922,50 @@ async function getUserData(query, searchKey, signal) {
   };
 }
 
+// --------------------------------------------------------------
+// HELPER: Stable serialization for cache keys
+// --------------------------------------------------------------
+
+/*
+WHY outside the memoized function?
+- Avoid recreating the function on every invocation.
+- Cleaner and slightly more performant.
+*/
+function serialize(arg) {
+  // Symbols / Functions
+  // WHY?
+  // JSON.stringify ignores functions and symbols.
+  // Convert them into strings so cache keys stay deterministic.
+  if (typeof arg === "symbol" || typeof arg === "function") {
+    return arg.toString();
+  }
+
+  // Objects
+  if (typeof arg === "object" && arg !== null) {
+
+    /*
+    WHY sort object keys?
+
+    Avoid:
+    { a: 1, b: 2 }
+    and
+    { b: 2, a: 1 }
+
+    Both objects contain identical data but
+    JSON.stringify() would normally produce different strings
+    depending on insertion order.
+
+    Sorting ensures BOTH generate the SAME cache key.
+    */
+    return JSON.stringify(
+      Object.fromEntries(Object.entries(arg).sort())
+    );
+  }
+
+  // Primitive values
+  return String(arg);
+}
+
 function memoizeUserData(fn, ttl = 300000) {
   // 🧠 Cache Map
   // key → { value: Promise, expiry: number }
@@ -928,64 +977,145 @@ function memoizeUserData(fn, ttl = 300000) {
 
   return async function (...args) {
 
-    // 🔑 Normalize arguments into a stable cache key
-    function serialize(arg) {
-      // Symbols/functions converted to string for safety
-      if (typeof arg === "symbol" || typeof arg === "function") {
-        return arg.toString();
-      }
+        /*
+      WHY generate a cache key?
 
-      // Objects sorted by key to ensure stable order
-      if (typeof arg === "object" && arg !== null) {
-        return JSON.stringify(
-          Object.fromEntries(Object.entries(arg).sort())
-        );
-      }
+      Cache works using:
+          key  -> Promise
 
-      // Primitives
-      return String(arg);
-    }
+      Same inputs should always produce
+      the same cache key.
 
-    // Final cache key
-    const key = JSON.stringify(args.map(serialize));
+      Different inputs should produce
+      different cache keys.
+      */
 
-    const now = Date.now();
-    const cached = cache.get(key);
+      const key = JSON.stringify(args.map(serialize));
 
-    // ✅ CACHE HIT
-    // Return SAME in-flight Promise if TTL is valid
+      const now = Date.now();
+      const cached = cache.get(key);
+
+    // --------------------------------------------------------------
+    // CACHE HIT
+    // --------------------------------------------------------------
+
+    /*
+    WHY return the cached Promise instead of waiting
+    for it to resolve first?
+
+    Example:
+
+    memoized("Bret");
+    memoized("Bret");
+
+    If the first request is still fetching,
+    both callers receive the SAME Promise.
+
+    Result:
+    ✅ Only ONE API request
+    ✅ No duplicate network calls
+
+    This is called
+    "In-flight Request Deduplication"
+    */
+
     if (cached && now < cached.expiry) {
-      console.log(`✅ CACHE HIT → key: ${key}`);
+      console.log(`✅ CACHE HIT → ${key}`);
       return cached.value;
     }
 
     console.log(`📡 FETCHING → New request for key: ${key}`);
 
-    // 🆕 Create AbortController
-    const controller = new AbortController();
-    controllers.set(key, controller);
+    // --------------------------------------------------------------
+      // CACHE MISS
+      // --------------------------------------------------------------
 
-    // 🚀 Call original async function
-    const promise = fn(...args, controller.signal)
-      .catch(err => {
-        // ❌ Remove failed/aborted requests from cache
+      console.log(`📡 CACHE MISS → Fetching new data`);
+
+      // Create controller (optional feature)
+      const controller = new AbortController();
+      controllers.set(key, controller);
+
+      /*
+      WHY cache the Promise immediately?
+
+      Wrong approach:
+
+      const data = await fn(...);
+      cache.set(key, data);
+
+      Problem:
+      Two callers arriving before await finishes
+      will BOTH call the API.
+
+      Correct approach:
+
+      const promise = fn(...);
+      cache.set(key, promise);
+
+      Now every caller shares the SAME Promise.
+
+      Interview keyword:
+      Promise Memoization
+      */
+
+      const promise = fn(...args, controller.signal)
+        .catch(err => {
+
+        /*
+        WHY remove failed requests?
+
+        Never cache failed Promises.
+
+        Otherwise:
+
+        First request ❌ fails
+
+        Second request
+            ↓
+        Returns same rejected Promise forever.
+
+        Delete it so future calls
+        can retry successfully.
+        */
+
         cache.delete(key);
 
-        // WHY handle AbortError?
-        // Aborted fetch rejects promise → must not crash app
+        /*
+        WHY handle AbortError separately?
+
+        User intentionally cancelled the request.
+
+        This isn't an application error.
+
+        Remove from cache and silently exit.
+        */
+
         if (err.name === "AbortError") {
-          console.log(`⚠️ Request aborted for key: ${key}`);
+          console.log("⚠️ Request aborted");
           return;
         }
 
         throw err;
       })
-      .finally(() => {
-        // 🧹 Cleanup controller after completion
-        controllers.delete(key);
-      });
+     .finally(() => {
+
+      /*
+      WHY delete AbortController?
+
+      Request is finished.
+
+      Keeping unused controllers
+      wastes memory.
+
+      Clean up after completion.
+      */
+
+      controllers.delete(key);
+    });
 
     // 💾 Cache the Promise immediately
+    // If two identical requests arrive before the first one finishes, caching only the resolved value means both requests trigger separate API calls. Caching the Promise immediately ensures all callers await the same in-flight request, preventing duplicate work.
     cache.set(key, {
       value: promise,
       expiry: now + ttl,
@@ -1018,56 +1148,301 @@ setTimeout(() => {
 
 
 // --------------------------------------------------------------
-// 13. RETRY PROMISES N NUMBER OF TIMES
+// 13. RETRY A PROMISE N NUMBER OF TIMES
 // --------------------------------------------------------------
 
-/* CREATE A DELAY function */
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/*
+Retry an async operation if it fails.
 
-/* retry function => for a particular delay and for n num of times */
-const retryWithDelay = async(operation, retries = 3, delay = 100, finalErr = 'Retry Failed') => {
-   try {
-     const result = await operation();
-     return result;
-   } catch (error) {
-     if(retries <= 0){
-         return Promise.reject(finalErr);
-     }
-     console.log(`Retrying ... Attempts left: ${retries}`);
+Common use cases:
+✔ API requests
+✔ Database queries
+✔ File uploads
+✔ Third-party services
+*/
 
-     await wait(delay);
+// --------------------------------------------------------------
+// WAIT (Delay Helper)
+// --------------------------------------------------------------
 
-     retryWithDelay(operation, retries - 1, delay, finalErr);
-   }
-}
+/*
+WHY create wait()?
 
-/* Fetch User Data */
-const fetchUserData = () => {
-  return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      if(Math.random() > 0.9){
-        resolve({
-          userId: 1, name: 'Smith Jone'
-        })
-      } else {
-        reject('Network Error');
-      }
-    }, 1000)
-  })
-}
+JavaScript has no built-in sleep().
 
-/* Combine all Function and Test */
-const testRetryLogic = async () => {
+wait(ms) creates a Promise that resolves
+after the specified time.
+
+Useful for delaying retries.
+*/
+
+const wait = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+// --------------------------------------------------------------
+// RETRY FUNCTION
+// --------------------------------------------------------------
+
+/*
+Parameters
+
+operation -> Async function to execute
+retries   -> Maximum retry attempts
+delay     -> Wait time before each retry
+finalErr  -> Error message after all retries fail
+
+WHY add attempt?
+
+retries tells us how many retries remain.
+
+attempt tells us which retry we're currently on.
+
+Attempt number is needed to calculate
+Exponential Backoff.
+*/
+
+const retryWithDelay = async (
+  operation,
+  retries = 3,
+  delay = 1000,
+  finalErr = "Retry Failed",
+  attempt = 1
+) => {
+
   try {
-    const userData = await retryWithDelay(fetchUserData, 5, 2000);
-    console.log('User data retreived successfully', userData);
+
+    /*
+    WHY call operation() instead of passing a Promise?
+
+    Passing a function allows creating
+    a NEW Promise on every retry.
+
+    Wrong ❌
+
+    retry(fetch(...))
+
+    fetch() already started.
+
+    Correct ✅
+
+    retry(() => fetch(...))
+
+    A fresh request is created every retry.
+    */
+
+    const result = await operation();
+
+    /*
+    SUCCESS
+
+    Return immediately.
+
+    No more retries needed.
+    */
+
+    return result;
+
   } catch (error) {
-    console.log('Failed to retreive user Data', error);
+
+    /*
+    WHY use try/catch?
+
+    When an awaited Promise rejects,
+
+    await throws an exception.
+
+    catch() decides whether to:
+
+    ✔ Retry
+    OR
+    ✔ Fail permanently
+    */
+
+    /*
+    WHY stop when retries reach 0?
+
+    Prevent infinite recursion.
+
+    All retry attempts have been exhausted.
+
+    throw inside an async function automatically
+    returns a rejected Promise.
+    */
+
+    if (retries <= 0) {
+      throw new Error(finalErr);
+    }
+
+   console.log(
+    `🔄 Attempt ${attempt + 1} of ${attempt + retries + 1}`
+    );
+
+    /*
+    WHY use Exponential Backoff?
+
+    Instead of waiting the same time
+    between every retry,
+
+    increase the delay after each failure.
+
+    Example
+
+    Attempt 1 → wait 1 sec
+    Attempt 2 → wait 2 sec
+    Attempt 3 → wait 4 sec
+    Attempt 4 → wait 8 sec
+
+    Benefits
+
+    ✔ Reduces server load
+    ✔ Prevents request storms
+    ✔ Gives the service time to recover
+    ✔ Common strategy used by AWS, Google Cloud, Stripe, etc.
+    */
+
+    // Calculate exponentially increasing delay
+    const backoffDelay = delay * Math.pow(2, attempt - 1);
+
+    console.log(`⏳ Waiting ${backoffDelay} ms before retry...`);
+
+    await wait(backoffDelay);
+
+    /*
+    WHY return the recursive call?
+
+    Very important interview point.
+
+    Wrong ❌
+
+    retryWithDelay(...)
+
+    The retry executes,
+    but its Promise is ignored.
+
+    Caller never receives
+    the successful retry result.
+
+    Correct ✅
+
+    return retryWithDelay(...)
+
+    The recursive Promise is returned
+    back to the original caller.
+      
+    WHY increment attempt?
+
+    Each retry represents a new attempt.
+
+    Increasing attempt causes
+    the delay to grow exponentially.
+
+    Attempt 1 → 1 sec
+    Attempt 2 → 2 sec
+    Attempt 3 → 4 sec
+    ...
+
+    */
+
+    return retryWithDelay(
+      operation,
+      retries - 1,
+      delay,
+      finalErr,
+      attempt + 1
+    );
   }
-}
+};
+
+// --------------------------------------------------------------
+// SAMPLE ASYNC FUNCTION
+// --------------------------------------------------------------
+
+/*
+Simulate an unreliable API.
+
+Math.random() > 0.9
+
+≈10% Success
+≈90% Failure
+
+Useful for testing retry logic.
+*/
+
+const fetchUserData = () => {
+
+  return new Promise((resolve, reject) => {
+
+    setTimeout(() => {
+
+      if (Math.random() > 0.9) {
+
+        resolve({
+          userId: 1,
+          name: "Smith Jone",
+        });
+
+      } else {
+
+        reject("Network Error");
+
+      }
+
+    }, 1000);
+
+  });
+
+};
+
+// --------------------------------------------------------------
+// TEST
+// --------------------------------------------------------------
+
+const testRetryLogic = async () => {
+
+  try {
+
+    /*
+    retryWithDelay() returns the final result
+    if any retry succeeds.
+
+    "Why do we pass fetchUserData instead of fetchUserData()?"
+    "fetchUserData() executes immediately and returns a Promise that's already in progress. If it fails, retrying the same Promise won't start a new request. Passing fetchUserData (the function itself) lets retryWithDelay call it again on each retry, creating a fresh Promise and a new network request every time."
+    */
+
+    const userData = await retryWithDelay(
+      fetchUserData,
+      5,
+      2000
+    );
+
+    console.log(
+      "✅ User data retrieved successfully",
+      userData
+    );
+
+  } catch (error) {
+
+    /*
+    WHY catch here?
+
+    If ALL retries fail,
+
+    retryWithDelay() throws.
+
+    Final caller must still handle
+    the rejection.
+    */
+
+    console.log(
+      "❌ Failed to retrieve user data",
+      error
+    );
+
+  }
+
+};
 
 testRetryLogic();
-
 
 
 // --------------------------------------------------------------
@@ -1075,483 +1450,1143 @@ testRetryLogic();
 // --------------------------------------------------------------
 
 function deepClone(obj, seen = new WeakMap()) {
-  /**
-   * 🧠 BASE CASE
-   * --------------------------------------------------
-   * If the value is:
-   *  - null
-   *  - OR not an object (number, string, boolean, undefined, symbol, function)
-   *  - NOTE: typeOf Array and NULL is OBJECT But typeof UNDEFINED is UNDEFINED because we need to
-   *          only allow objects and arrays
-   *
-   * Then return it directly.
-   *
-   * WHY?
-   * - Primitive values are immutable
-   * - They do not need deep cloning
-   * - Prevents unnecessary recursion
-   */
+
+  /*
+  ==================================================
+  🧠 BASE CASE
+  ==================================================
+
+  Return immediately if the value is:
+
+  ✔ null
+  ✔ number
+  ✔ string
+  ✔ boolean
+  ✔ bigint
+  ✔ symbol
+  ✔ undefined
+  ✔ function
+
+  WHY?
+
+  Only Objects and Arrays can contain
+  nested references that require deep cloning.
+
+  Primitive values are immutable,
+  so returning them directly is safe.
+
+  NOTE
+
+  typeof null === "object"   // Historical JavaScript quirk
+  typeof [] === "object"
+  typeof {} === "object"
+
+  That's why we explicitly check
+
+  obj === null
+  */
+
   if (obj === null || typeof obj !== "object") {
     return obj;
   }
 
-  /**
-   * 🔁 CIRCULAR REFERENCE CHECK
-   * --------------------------------------------------
-   * A circular dependency happens when an object contains a reference to itself, either directly or  indirectly
-   * const person = {name: "Alice"};
-   * person.self = person;  // Circular Reference
-   * 
-   * If we have already cloned this object before,
-   * return the stored clone.
-   *
-   * WHY?
-   * - Prevents infinite recursion
-   * - Handles circular references:
-   *
-   *   const a = {};
-   *   a.self = a;
-   *
-   * - WeakMap stores:
-   *   originalObject → clonedObject
-   */
+  /*
+  ==================================================
+  🔁 CIRCULAR REFERENCE CHECK
+  ==================================================
+
+  WHY keep track of cloned objects?
+
+  Example
+
+  const person = {
+      name: "John"
+  };
+
+  person.self = person;
+
+  Without WeakMap
+
+  deepClone(person)
+
+        ↓
+
+  person.self
+
+        ↓
+
+  person.self.self
+
+        ↓
+
+  person.self.self.self
+
+        ↓
+
+  Infinite recursion
+
+        ↓
+
+  Maximum call stack exceeded
+
+  WeakMap stores
+
+      Original Object
+              ↓
+      Cloned Object
+
+  If we encounter the same object again,
+  simply return the existing clone.
+
+  This preserves circular references.
+  */
+
   if (seen.has(obj)) {
     return seen.get(obj);
   }
 
-  /**
-   * 🏗️ CREATE CLONE CONTAINER
-   * --------------------------------------------------
-   * If obj is an array → create []
-   * If obj is an object → create a new object
-   *
-   * Object.create(Object.getPrototypeOf(obj))
-   *
-   * WHY Object.create?
-   * - Preserves the prototype chain
-   * - Ensures class instances remain instances
-   *
-   * Example:
-   * class User {}
-   * deepClone(new User()) instanceof User → ✅ true
-   */
+  /*
+  ==================================================
+  🏗 CREATE THE CLONE
+  ==================================================
+
+  WHY not simply write {} ?
+
+  {}
+
+  always creates a plain object.
+
+  Example
+
+  class User {}
+
+  const user = new User();
+
+  {}
+
+  loses the prototype.
+
+  Instead
+
+  Object.create(Object.getPrototypeOf(obj))
+
+  preserves the prototype chain.
+
+  Result
+
+  deepClone(user) instanceof User
+
+  ✔ true
+  */
+
+  const prototype = Object.getPrototypeOf(obj);
+
   const clone = Array.isArray(obj)
     ? []
-    : Object.create(Object.getPrototypeOf(obj));
+    : Object.create(prototype);
 
-  /**
-   * 🧷 STORE IN WEAKMAP (VERY IMPORTANT)
-   * --------------------------------------------------
-   * Store the reference BEFORE cloning properties.
-   *
-   * WHY?
-   * - Circular references may appear in nested objects
-   * - If a nested object refers back to this object,
-   *   we can immediately return this clone
-   *
-   * WHY WeakMap?
-   * - Keys are objects only
-   * - Garbage-collected automatically
-   * - Prevents memory leaks
-   */
+  /*
+  ==================================================
+  🧷 STORE IN WEAKMAP
+  ==================================================
+
+  WHY store BEFORE recursion?
+
+  Nested objects may reference
+  the current object.
+
+  Example
+
+      A
+     / \
+    B   C
+     \ /
+      A
+
+  If we don't store the clone first,
+
+  recursion never knows that A
+  has already been cloned.
+
+  WHY WeakMap instead of Map?
+
+  ✔ Keys must be objects.
+  ✔ Automatically garbage collected.
+  ✔ Prevents memory leaks.
+
+  A normal Map keeps strong references,
+  preventing unused objects
+  from being garbage collected.
+  */
+
   seen.set(obj, clone);
 
-  /**
-   * 🔄 ITERATE OVER OBJECT PROPERTIES
-   * --------------------------------------------------
-   * Using `for...in` to iterate enumerable properties
-   */
-  for (const key in obj) {
-    /**
-     * 🔐 HAS OWN PROPERTY CHECK
-     * --------------------------------------------------
-     * Ensures we only copy object's own properties
-     * and NOT inherited ones.
-     *
-     * WHY Object.prototype.hasOwnProperty.call?
-     * - Safer than obj.hasOwnProperty
-     * - Works even if:
-     *   Object.create(null)
-     */
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
-      const value = obj[key];
+  /*
+  ==================================================
+  🔄 ITERATE OVER PROPERTIES
+  ==================================================
 
-      /**
-       * 📅 HANDLE DATE OBJECTS
-       * --------------------------------------------------
-       * Date is an object, but cloning it normally
-       * would copy the reference.
-       *
-       * new Date(value) creates a new instance
-       * with the same timestamp.
-       */
-      if (value instanceof Date) {
-        clone[key] = new Date(value);
-      }
+  WHY use Reflect.ownKeys()?
 
-      /**
-       * 🔍 HANDLE REGEXP OBJECTS
-       * --------------------------------------------------
-       * RegExp has internal state:
-       * - pattern (source)
-       * - flags (g, i, m, etc.)
-       *
-       * We must recreate it explicitly.
-       */
-      else if (value instanceof RegExp) {
-        clone[key] = new RegExp(value.source, value.flags);
-      }
+  It returns ALL own property keys.
 
-      /**
-       * 🧬 HANDLE NESTED OBJECTS / ARRAYS
-       * --------------------------------------------------
-       * If value is an object, recursively deep clone it.
-       *
-       * We pass the SAME WeakMap to keep track
-       * of already cloned objects.
-       */
-      else if (typeof value === "object") {
-        clone[key] = deepClone(value, seen);
-      }
+  ✔ String keys
+  ✔ Symbol keys
+  ✔ Non-enumerable keys
 
-      /**
-       * 🧾 HANDLE PRIMITIVE VALUES
-       * --------------------------------------------------
-       * Includes:
-       * - number
-       * - string
-       * - boolean
-       * - undefined
-       * - function
-       * - symbol
-       *
-       * Functions are copied by reference
-       * (this is intentional in JS).
-       */
-      else {
-        clone[key] = value;
-      }
+  Unlike
+
+  for...in
+
+  which
+
+  ❌ Includes inherited enumerable properties
+  ❌ Ignores Symbol keys
+
+  Unlike
+
+  Object.keys()
+
+  which
+
+  ❌ Ignores Symbol keys
+  ❌ Ignores non-enumerable properties
+
+  Reflect.ownKeys() is the most complete
+  way to clone an object's own properties.
+  */
+
+  for (const key of Reflect.ownKeys(obj)) {
+
+    const value = obj[key];
+
+    /*
+    ==================================================
+    📅 DATE
+    ==================================================
+
+    WHY special handling?
+
+    Date is an object.
+
+    Normal assignment
+
+    clone.date = value
+
+    copies only the reference.
+
+    Both objects would point
+    to the SAME Date instance.
+
+    getTime()
+
+    returns the timestamp.
+
+    new Date(timestamp)
+
+    creates a NEW Date object
+    with the same value.
+    */
+
+    if (value instanceof Date) {
+
+      clone[key] = new Date(value.getTime());
+
     }
+
+    /*
+    ==================================================
+    🔍 REGEXP
+    ==================================================
+
+    WHY recreate RegExp?
+
+    RegExp stores
+
+    ✔ Pattern
+    ✔ Flags
+    ✔ lastIndex
+
+    We recreate it to preserve
+    its complete state.
+
+    lastIndex is especially important
+    for global (/g)
+    and sticky (/y) regex.
+    */
+
+    else if (value instanceof RegExp) {
+
+      const regexClone = new RegExp(
+        value.source,
+        value.flags
+      );
+
+      regexClone.lastIndex = value.lastIndex;
+
+      clone[key] = regexClone;
+
+    }
+
+    /*
+    ==================================================
+    🧬 NESTED OBJECT / ARRAY
+    ==================================================
+
+    WHY recurse?
+
+    Objects may contain
+
+    Object
+      ↓
+    Object
+      ↓
+    Object
+      ↓
+    Array
+      ↓
+    Date
+
+    We recursively deep clone
+    every nested reference.
+
+    WHY pass the SAME WeakMap?
+
+    Every recursive call must share
+    the same record of already-cloned objects.
+
+    Creating a NEW WeakMap every time
+
+    would forget previously cloned objects
+
+    and circular references would fail.
+    */
+
+    else if (value !== null && typeof value === "object") {
+
+      clone[key] = deepClone(value, seen);
+
+    }
+
+    /*
+    ==================================================
+    🧾 PRIMITIVES / FUNCTIONS
+    ==================================================
+
+    WHY aren't functions deep cloned?
+
+    Functions are executable objects.
+
+    JavaScript cannot clone
+    their implementation.
+
+    Functions are intentionally copied
+    by reference.
+
+    This matches
+
+    structuredClone()
+
+    which also does not clone functions.
+    */
+
+    else {
+
+      clone[key] = value;
+
+    }
+
   }
 
-  /**
-   * ✅ RETURN FINAL CLONE
-   * --------------------------------------------------
-   * At this point:
-   * - All properties are deeply cloned
-   * - Circular references are preserved
-   * - Prototypes are maintained
-   */
+  /*
+  ==================================================
+  ✅ RETURN FINAL CLONE
+  ==================================================
+
+  At this point
+
+  ✔ Every nested object is cloned.
+  ✔ Arrays are cloned.
+  ✔ Dates are cloned.
+  ✔ RegExp objects are cloned.
+  ✔ Circular references are preserved.
+  ✔ Prototype chain is preserved.
+
+  Return the completed deep clone.
+  */
+
   return clone;
+
 }
 
 
+  // --------------------------------------------------------------
+  // 15. CANCELLABLE PROMISE
+  // --------------------------------------------------------------
 
-// --------------------------------------------------------------
-// 15. CANCELLABLE PROMISE
-// --------------------------------------------------------------
+  /*
+  ==================================================
+  WHAT IS A CANCELLABLE PROMISE?
+  ==================================================
 
-/**
- * ❌ Custom Error Class for Cancellation
- * --------------------------------------------------
- * We create a custom error so that:
- * - Cancellation can be distinguished from real failures
- * - Consumers can specifically catch cancellation errors
- */
-class CanceledPromiseError extends Error {
-  constructor() {
-    /**
-     * Call the parent Error constructor
-     * Sets the error message
-     */
-    super("Promise has been canceled");
+  JavaScript Promises CANNOT be cancelled.
 
-    /**
-     * Set a custom name for easier identification
-     * Useful in catch blocks:
-     *
-     * if (err.name === "CanceledPromiseError") { ... }
-     */
-    this.name = "CanceledPromiseError";
+  Once an async operation starts,
+
+  fetch()
+  database query
+  file upload
+
+  they continue running until completion.
+
+  This utility DOES NOT stop
+  the async operation.
+
+  Instead,
+
+  it ignores the final result
+  if cancel() was called.
+
+  Think of it as
+
+  "Ignore the result"
+
+  rather than
+
+  "Stop the work."
+
+  True cancellation requires
+
+  ✔ AbortController
+  ✔ clearTimeout()
+  ✔ clearInterval()
+  ✔ Worker termination
+  */
+
+  // --------------------------------------------------------------
+  // CUSTOM CANCELLATION ERROR
+  // --------------------------------------------------------------
+
+  /*
+  WHY create a custom Error?
+
+  Without it,
+
+  catch(error)
+
+  cannot distinguish
+
+  ✔ Network Error
+  ✔ Server Error
+  ✔ Cancellation
+
+  Consumers can detect
+
+  error instanceof CanceledPromiseError
+
+  or
+
+  error.name
+  */
+
+  class CanceledPromiseError extends Error {
+
+    constructor() {
+
+      super("Promise has been canceled");
+
+      this.name = "CanceledPromiseError";
+
+    }
+
   }
-}
 
-/**
- * 🧩 Add a `cancelable` utility
- * --------------------------------------------------
- * This is NOT true Promise cancellation.
- * Instead, we wrap a promise and control
- * whether its result is allowed to resolve.
- *
- * Usage:
- * const p = Promise.cancelable(fetchData());
- * p.cancel();
- */
-Promise.cancelable = (promise) => {
-  /**
-   * 🚩 Cancellation Flag
-   * --------------------------------------------------
-   * Tracks whether cancel() has been called.
-   *
-   * WHY boolean flag?
-   * - Promises cannot be stopped once started
-   * - We can only decide whether to use the result
-   */
-  let isCanceled = false;
+  // --------------------------------------------------------------
+  // MAKE PROMISE CANCELABLE
+  // --------------------------------------------------------------
 
-  /**
-   * 🎁 Wrapped Promise
-   * --------------------------------------------------
-   * We create a new promise that:
-   * - Listens to the original promise
-   * - Decides whether to resolve or reject
-   */
-  const wrappedPromise = new Promise((resolve, reject) => {
-    /**
-     * Attach handlers to the original promise
-     */
-    promise.then(
-      /**
-       * ✅ Original promise resolved
-       */
-      (value) => {
-        /**
-         * If cancel() was called before resolution,
-         * reject instead of resolving.
-         */
-        if (isCanceled) {
-          reject(new CanceledPromiseError());
-        } else {
-          /**
-           * Otherwise, resolve normally
-           */
+  /*
+  WHY create a utility function?
+
+  Avoid modifying built-in objects.
+
+  Don't do
+
+  Promise.cancelable(...)
+
+  This is called
+
+  Monkey Patching
+
+  Problems
+
+  ❌ Changes global behavior
+  ❌ Can conflict with libraries
+  ❌ Surprises other developers
+
+  Instead
+
+  makeCancelable(promise)
+
+  is safer and preferred
+  in interviews.
+  */
+
+  function makeCancelable(originalPromise) {
+
+    /*
+    Cancellation Flag
+
+    WHY?
+
+    Promises have no
+
+    cancel()
+
+    stop()
+
+    pause()
+
+    methods.
+
+    We simply remember
+    whether cancellation
+    was requested.
+    */
+
+    let canceled = false;
+
+    /*
+    Wrapped Promise
+
+    WHY wrap the original Promise?
+
+    Gives us control over
+
+    resolve()
+
+    reject()
+
+    without modifying
+    the original Promise.
+    */
+
+    const promise = new Promise((resolve, reject) => {
+
+      originalPromise
+
+        .then((value) => {
+
+          /*
+          Promise completed successfully.
+
+          Was it cancelled?
+          */
+
+          if (canceled) {
+
+            /*
+            WHY reject instead of resolve?
+
+            Cancellation means
+
+            "Ignore this result."
+
+            Rejecting allows callers
+            to handle cancellation
+            inside catch().
+
+            Similar to AbortController.
+            */
+
+            reject(new CanceledPromiseError());
+
+            return;
+
+          }
+
           resolve(value);
-        }
-      },
 
-      /**
-       * ❌ Original promise rejected
-       */
-      (error) => {
-        /**
-         * Forward the original error as-is
-         * (Cancellation does NOT affect real failures)
-         */
-        reject(error);
-      }
-    );
-  });
+        })
 
-  /**
-   * 🛑 cancel() method
-   * --------------------------------------------------
-   * Adds a custom cancel function
-   * to the wrapped promise.
-   *
-   * Calling this does NOT stop the async work,
-   * it only changes how the result is handled.
-   */
-  wrappedPromise.cancel = () => {
-    /**
-     * Flip the cancellation flag
-     */
-    isCanceled = true;
-  };
+        .catch((error) => {
 
-  /**
-   * 🎯 Return the wrapped promise
-   * --------------------------------------------------
-   * The consumer gets:
-   * - a normal promise
-   * - plus a cancel() method
-   */
-  return wrappedPromise;
-};
+          /*
+          WHY forward original errors?
 
-function delayResolve(value, ms) {
-  return new Promise((resolve) => {
-    setTimeout(() => {
-      resolve(value);
-    }, ms);
-  });
-}
+          Cancellation should NEVER hide
 
-function delayReject(error, ms) {
-  return new Promise((_, reject) => {
-    setTimeout(() => {
-      reject(error);
-    }, ms);
-  });
-}
+          ✔ Network failures
+          ✔ Server errors
+          ✔ Programming errors
 
-const p1 = Promise.cancelable(delayResolve("SUCCESS", 1000));
+          Real failures should still
+          reach the caller.
+          */
 
-p1.then((result) => {
-  console.log("Resolved:", result);
-}).catch((err) => {
-  console.error("Error:", err);
-});
+          reject(error);
 
-const p2 = Promise.cancelable(delayResolve("SHOULD NOT RESOLVE", 1000));
+        });
 
-setTimeout(() => {
-  p2.cancel();
-}, 300);
-
-p2.then((result) => {
-  console.log("Resolved:", result);
-}).catch((err) => {
-  console.error("Caught:", err.name, err.message);
-});
-
-
-
-// --------------------------------------------------------------
-// 16. EVENT EMITTER
-// --------------------------------------------------------------
-
-/**
- * 📢 EventEmitter Implementation
- * --------------------------------------------------
- * Allows:
- * - Subscribing to named events
- * - Emitting events with arguments
- * - Unsubscribing using a handle
- */
-class EventEmitter {
-  constructor() {
-    /**
-     * 🗂️ Store for all event subscriptions
-     * --------------------------------------------------
-     * Structure:
-     * Map {
-     *   eventName => Map {
-     *     subscriptionId => callback
-     *   }
-     * }
-     *
-     * WHY Map?
-     * - Preserves insertion order
-     * - O(1) add / delete / lookup
-     * - Keys can be anything (string, symbol, etc.)
-     */
-    this._eventSubscriptions = new Map();
-  }
-
-  /**
-   * ➕ Subscribe to an event
-   * --------------------------------------------------
-   * @param {string} eventName - name of the event
-   * @param {Function} callback - function to execute
-   *
-   * @returns {Object} { remove() } - unsubscribe handler
-   */
-  subscribe(eventName, callback) {
-    /**
-     * 🛡️ Type Safety
-     * --------------------------------------------------
-     * Ensures only functions can be registered
-     * Prevents runtime crashes during emit()
-     */
-    if (typeof callback !== "function") {
-      throw new TypeError("Callback should be a function");
-    }
-
-    /**
-     * 📦 Initialize event bucket if it doesn't exist
-     * --------------------------------------------------
-     * Each event has its own Map of subscriptions
-     */
-    if (!this._eventSubscriptions.has(eventName)) {
-      this._eventSubscriptions.set(eventName, new Map());
-    }
-
-    /**
-     * 🆔 Unique Subscription Identifier
-     * --------------------------------------------------
-     * Symbol guarantees uniqueness
-     * No risk of collision
-     *
-     * Why not index or number?
-     * - Safer
-     * - Cannot be accidentally overwritten
-     */
-    const subscriptionId = Symbol();
-
-    /**
-     * Get all subscriptions for this event
-     */
-    const subscriptions = this._eventSubscriptions.get(eventName);
-
-    /**
-     * Store the callback using the unique id
-     */
-    subscriptions.set(subscriptionId, callback);
-
-    /**
-     * 🧹 Return an unsubscribe handle
-     * --------------------------------------------------
-     * Allows the consumer to remove this listener
-     * without exposing internal data structures
-     */
-    return {
-      remove: () => {
-        /**
-         * Prevent double removal
-         */
-        if (!subscriptions.has(subscriptionId)) {
-          throw new Error("Subscription has already removed");
-        }
-
-        /**
-         * Remove the callback from the event
-         */
-        subscriptions.delete(subscriptionId);
-      },
-    };
-  }
-
-  /**
-   * 🚀 Emit an event
-   * --------------------------------------------------
-   * @param {string} eventName - event to trigger
-   * @param {...any} args - arguments passed to listeners
-   */
-  emit(eventName, ...args) {
-    /**
-     * Fetch subscriptions for this event
-     */
-    const subscriptions = this._eventSubscriptions.get(eventName);
-
-    /**
-     * Guard clause:
-     * - No listeners registered
-     */
-    if (!subscriptions) {
-      throw new Error("No event found");
-    }
-
-    /**
-     * 🔄 Execute all callbacks
-     * --------------------------------------------------
-     * Each subscriber receives the same arguments
-     */
-    subscriptions.forEach((callback) => {
-      callback(...args);
     });
+
+    /*
+    Return BOTH
+
+    ✔ Promise
+    ✔ cancel()
+
+    WHY?
+
+    Keep Promise as a normal Promise.
+
+    Don't attach custom methods
+
+    promise.cancel()
+
+    Returning an object keeps
+    responsibilities separate.
+    */
+
+    return {
+
+      promise,
+
+      cancel() {
+
+        /*
+        IMPORTANT
+
+        This DOES NOT stop
+
+        fetch()
+
+        or any async work.
+
+        It only changes
+        how the final result
+        is handled.
+        */
+
+        canceled = true;
+
+      }
+
+    };
+
   }
-}
 
-const emitter = new EventEmitter();
+  // --------------------------------------------------------------
+  // SAMPLE ASYNC FUNCTIONS
+  // --------------------------------------------------------------
 
-const sub = emitter.subscribe("click", () => {
-  console.log("Clicked!");
-});
+  function delayResolve(value, ms) {
 
-emitter.emit("click");  // "Clicked!"
+    return new Promise((resolve) => {
 
-sub.remove();
-sub.remove(); // Uncaught Error: Subscription has already removed"
+      setTimeout(() => {
+
+        resolve(value);
+
+      }, ms);
+
+    });
+
+  }
+
+  function delayReject(error, ms) {
+
+    return new Promise((_, reject) => {
+
+      setTimeout(() => {
+
+        reject(error);
+
+      }, ms);
+
+    });
+
+  }
+
+  // --------------------------------------------------------------
+  // TEST 1
+  // NORMAL RESOLUTION
+  // --------------------------------------------------------------
+
+  /*
+  Expected
+
+  Resolved: SUCCESS
+  */
+
+  const request1 = makeCancelable(
+
+    delayResolve("SUCCESS", 1000)
+
+  );
+
+  request1.promise
+
+    .then((result) => {
+
+      console.log("Resolved:", result);
+
+    })
+
+    .catch((error) => {
+
+      console.error(error);
+
+    });
+
+  // --------------------------------------------------------------
+  // TEST 2
+  // CANCEL BEFORE COMPLETION
+  // --------------------------------------------------------------
+
+  /*
+  Expected
+
+  Caught
+
+  CanceledPromiseError
+
+  Promise has been canceled
+  */
+
+  const request2 = makeCancelable(
+
+    delayResolve("SHOULD NOT RESOLVE", 1000)
+
+  );
+
+  setTimeout(() => {
+
+    request2.cancel();
+
+  }, 300);
+
+  request2.promise
+
+    .then((result) => {
+
+      console.log(result);
+
+    })
+
+    .catch((error) => {
+
+      console.log(
+
+        "Caught:",
+
+        error.name,
+
+        error.message
+
+      );
+
+    });
+
+
+
+    // --------------------------------------------------------------
+    // 16. EVENT EMITTER
+    // --------------------------------------------------------------
+
+    /*
+    ====================================================
+    WHAT IS AN EVENT EMITTER?
+    ====================================================
+
+    An Event Emitter implements the
+
+    Publisher → Subscriber (Pub/Sub)
+
+    design pattern.
+
+    Publisher
+
+    ↓
+
+    Emits an event
+
+    ↓
+
+    Every subscriber listening
+    to that event gets notified.
+
+    Examples
+
+    ✔ Button Click
+    ✔ API Success
+    ✔ Chat Message
+    ✔ Notification
+    ✔ Socket Events
+
+    Node.js itself provides
+    an EventEmitter class.
+    */
+
+    class EventEmitter {
+
+      constructor() {
+
+        /*
+        ==================================================
+        🗂 EVENT STORE
+        ==================================================
+
+        Structure
+
+        Map {
+
+          eventName
+
+                ↓
+
+          Map {
+
+            subscriptionId
+
+                  ↓
+
+            callback
+
+          }
+
+        }
+
+        WHY Map?
+
+        ✔ O(1) lookup
+        ✔ O(1) insertion
+        ✔ O(1) deletion
+
+        Preserves insertion order.
+
+        Keys can be
+
+        ✔ String
+        ✔ Symbol
+        ✔ Number
+
+        Better than plain objects
+        for dynamic collections.
+        */
+
+        this.events = new Map();
+
+      }
+
+      // --------------------------------------------------
+      // SUBSCRIBE
+      // --------------------------------------------------
+
+      subscribe(eventName, callback) {
+
+        /*
+        WHY validate callback?
+
+        Prevent runtime errors.
+
+        Only functions
+        can be executed.
+        */
+
+        if (typeof callback !== "function") {
+          throw new TypeError(
+            "Callback must be a function."
+          );
+        }
+
+        /*
+        Create a new event bucket
+        if this is the first subscriber.
+        */
+
+        if (!this.events.has(eventName)) {
+
+          this.events.set(
+
+            eventName,
+
+            new Map()
+
+          );
+
+        }
+
+        /*
+        WHY Symbol?
+
+        Every subscription gets
+        a unique identifier.
+
+        Even identical callbacks
+        receive different IDs.
+
+        No collision risk.
+        */
+
+        const subscriptionId = Symbol(eventName);
+
+        const subscriptions =
+          this.events.get(eventName);
+
+        subscriptions.set(
+          subscriptionId,
+          callback
+        );
+
+        /*
+        Return an unsubscribe handle.
+
+        WHY?
+
+        Don't expose
+        internal Maps.
+
+        Caller only receives
+
+        unsubscribe()
+
+        similar to
+
+        RxJS
+
+        DOM events
+
+        etc.
+        */
+
+        return {
+
+          unsubscribe: () => {
+
+            /*
+            Calling unsubscribe()
+            multiple times should NOT crash.
+
+            Real EventEmitter
+            implementations usually
+            make this operation idempotent.
+
+            delete()
+
+            already returns
+
+            true / false
+
+            so we simply ignore
+            repeated calls.
+            */
+
+            subscriptions.delete(
+              subscriptionId
+            );
+
+            /*
+            OPTIONAL CLEANUP
+
+            Remove the event itself
+            when no subscribers remain.
+
+            Prevents empty Maps
+            accumulating over time.
+            */
+
+            if (subscriptions.size === 0) {
+
+              this.events.delete(
+                eventName
+              );
+
+            }
+
+          }
+
+        };
+
+      }
+
+      // --------------------------------------------------
+      // EMIT
+      // --------------------------------------------------
+
+      emit(eventName, ...args) {
+
+        /*
+        WHY use a guard clause?
+
+        No subscribers.
+
+        Nothing to do.
+
+        Real EventEmitter
+        implementations simply return.
+
+        Throwing an error
+        isn't necessary.
+        */
+
+        const subscriptions =
+          this.events.get(eventName);
+
+        if (!subscriptions) {
+
+          return;
+
+        }
+
+        /*
+        WHY spread arguments?
+
+        Every subscriber receives
+
+        exactly the same arguments.
+
+        Example
+
+        emit(
+
+          "message",
+
+          "Hello",
+
+          "John"
+
+        )
+
+        becomes
+
+        callback(
+
+          "Hello",
+
+          "John"
+
+        )
+        */
+
+        for (const callback of subscriptions.values()) {
+
+          callback(...args);
+
+        }
+
+      }
+
+    }
+
+    // --------------------------------------------------------------
+    // TEST CASE 1
+    // MULTIPLE SUBSCRIBERS
+    // --------------------------------------------------------------
+
+    const emitter1 = new EventEmitter();
+
+    const sub1 = emitter1.subscribe("login", (user) => {
+      console.log("Analytics:", user);
+    });
+
+    const sub2 = emitter1.subscribe("login", (user) => {
+      console.log("Welcome:", user);
+    });
+
+    const sub3 = emitter1.subscribe("login", (user) => {
+      console.log("Audit Log:", user);
+    });
+
+    console.log("----- Emit login -----");
+
+    emitter1.emit("login", "John");
+
+    /*
+    Expected Output
+
+    ----- Emit login -----
+
+    Analytics: John
+    Welcome: John
+    Audit Log: John
+    */
+
+    // --------------------------------------------------------------
+    // TEST CASE 2
+    // UNSUBSCRIBE ONE LISTENER
+    // --------------------------------------------------------------
+
+    console.log("----- Remove Welcome Listener -----");
+
+    sub2.unsubscribe();
+
+    emitter1.emit("login", "Alice");
+
+    /*
+    Expected Output
+
+    ----- Remove Welcome Listener -----
+
+    Analytics: Alice
+    Audit Log: Alice
+
+    (Welcome listener is no longer called.)
+    */
+
+    // --------------------------------------------------------------
+    // TEST CASE 3
+    // DIFFERENT EVENTS
+    // --------------------------------------------------------------
+
+    const emitter2 = new EventEmitter();
+
+    emitter2.subscribe("click", () => {
+      console.log("Button Clicked");
+    });
+
+    emitter2.subscribe("hover", () => {
+      console.log("Mouse Hover");
+    });
+
+    console.log("----- Click Event -----");
+    emitter2.emit("click");
+
+    console.log("----- Hover Event -----");
+    emitter2.emit("hover");
+
+    /*
+    Expected Output
+
+    ----- Click Event -----
+
+    Button Clicked
+
+    ----- Hover Event -----
+
+    Mouse Hover
+    */
+
+
+    // --------------------------------------------------------------
+    // TEST CASE 4
+    // NO SUBSCRIBERS
+    // --------------------------------------------------------------
+
+    const emitter3 = new EventEmitter();
+    console.log("Before emit");
+    emitter3.emit("unknown");
+    console.log("After emit");
+
+    /*
+    Expected Output
+
+    Before emit
+    After emit
+
+    No error is thrown.
+    Nothing happens.
+    */
 
 
 
@@ -1603,65 +2638,183 @@ const flatData = [
 ]
 
 function convertToTree(flatData) {
-  /**
-   * WHY Map?
-   * - O(1) access by id
-   * - Cleaner than plain object for interview discussion
-   */
-  const idToNodeMap = new Map();
 
-  /**
-   * This will store all root-level nodes
-   * (nodes whose parentId === null)
-   */
+  /*
+  ==================================================
+  STEP 1
+
+  CREATE
+
+      id
+
+        ↓
+
+      node
+
+  LOOKUP MAP
+  ==================================================
+
+  WHY Map?
+
+  Need constant time lookup.
+
+  id
+
+      ↓
+
+  Node
+
+  Complexity
+
+  Lookup
+
+  O(1)
+
+  Without Map
+
+  We'd search the array
+  every time.
+
+  Complexity becomes
+
+  O(n²)
+  */
+
+  const idToNode = new Map();
+
+  /*
+  Root nodes.
+
+  These become
+
+  Tree Entry Points.
+  */
+
   const tree = [];
 
-  /**
-   * STEP 1: Create a map of id → node
-   * WHY?
-   * - Ensures every node exists before linking children
-   * - Avoids nested loops (O(n²))
-   */
+  /*
+  ==================================================
+  PASS 1
+
+  CREATE EVERY NODE
+  ==================================================
+
+  WHY two passes?
+
+  Imagine
+
+      Child
+
+         ↓
+
+      Parent
+
+  appears later
+  in the array.
+
+  If we immediately try
+
+  parent.children.push(child)
+
+  parent might not exist yet.
+
+  First
+
+  Create EVERY node.
+
+  Second
+
+  Connect them.
+
+  This works regardless
+  of input order.
+  */
+
   for (const item of flatData) {
-    idToNodeMap.set(item.id, {
+
+    idToNode.set(item.id, {
+
       ...item,
-      children: [] // initialize children array
+
+      children: []
+
     });
+
   }
 
-  /**
-   * STEP 2: Build parent-child relationships
-   */
+  /*
+  ==================================================
+  PASS 2
+
+  CONNECT PARENTS
+  ==================================================
+  */
+
   for (const item of flatData) {
-    const node = idToNodeMap.get(item.id);
+
+    const node = idToNode.get(item.id);
+
+    /*
+    Root Node
+
+    No parent.
+
+    Add directly
+    to the tree.
+    */
 
     if (item.parentId === null) {
-      /**
-       * Root node
-       * WHY push to tree?
-       * - These are entry points for the sidebar
-       */
-      tree.push(node);
-    } else {
-      /**
-       * Child node
-       * Find its parent and push into parent's children
-       */
-      const parentNode = idToNodeMap.get(item.parentId);
 
-      // Defensive check (good interview practice)
-      if (parentNode) {
-        parentNode.children.push(node);
-      }
+      tree.push(node);
+
+      continue;
+
     }
+
+    /*
+    Child Node
+
+    Find parent.
+
+    Parent
+
+      ↓
+
+    Push child.
+    */
+
+    const parent = idToNode.get(item.parentId);
+
+    /*
+    WHY defensive check?
+
+    Data may be invalid.
+
+    Example
+
+    parentId = 999
+
+    but no node
+    with id 999 exists.
+
+    Avoids runtime errors.
+    */
+
+    if (parent) {
+
+      parent.children.push(node);
+
+    }
+
   }
 
   return tree;
+
 }
 
 const treeData = convertToTree(flatData);
-console.log(treeData);
 
+console.log(treeData);
 
 
 // --------------------------------------------------------------
@@ -1686,58 +2839,176 @@ const breadCrum = [
 ];
 
 function buildBreadcrumbTrail(data) {
-  /**
-   * STEP 1: Create a map for O(1) lookup
-   * id → node
-   *
-   * WHY?
-   * - Breadcrumb traversal needs fast parent lookup
-   * - Avoids O(n²)
-   */
+
+  /*
+  ==================================================
+  STEP 1
+
+  CREATE
+
+      id
+
+        ↓
+
+      node
+
+  LOOKUP MAP
+  ==================================================
+
+  WHY Map?
+
+  Parent lookup
+
+  O(1)
+
+  Without Map
+
+  Every lookup would scan
+  the entire array.
+
+  Complexity
+
+  O(n²)
+  */
+
   const idMap = new Map();
 
   for (const item of data) {
-    // Only store nodes with a valid id
+
+    /*
+    This example uses
+
+    id === null
+
+    to represent
+    the current page.
+
+    Don't store it
+    in the lookup Map.
+    */
+
     if (item.id !== null) {
+
       idMap.set(item.id, item);
+
     }
+
   }
 
-  /**
-   * STEP 2: Find the leaf node
-   * Leaf is defined as id === null
-   */
-  const leafNode = data.find(item => item.id === null);
+  /*
+  ==================================================
+  STEP 2
 
-  /**
-   * Defensive check (interview-safe)
-   */
-  if (!leafNode) return "";
+  FIND CURRENT NODE
+  ==================================================
 
-  /**
-   * STEP 3: Walk from leaf → root
-   */
+  NOTE
+
+  In a real application,
+
+  you'd usually receive
+
+  currentId
+
+  as a function parameter.
+
+  This example identifies
+
+  id === null
+
+  as the current page.
+  */
+
+  const currentNode = data.find(
+
+    item => item.id === null
+
+  );
+
+  /*
+  Defensive check.
+
+  Invalid input.
+  */
+
+  if (!currentNode) {
+
+    return "";
+
+  }
+
+  /*
+  ==================================================
+  STEP 3
+
+  WALK
+
+  CURRENT
+
+      ↓
+
+  ROOT
+  ==================================================
+  */
+
   const path = [];
-  let current = leafNode;
+
+  let current = currentNode;
 
   while (current) {
-    /**
-     * WHY unshift?
-     * - We traverse bottom → top
-     * - Breadcrumb displays top → bottom
-     */
+
+    /*
+    WHY unshift()?
+
+    We traverse
+
+    Bottom
+
+      ↓
+
+    Top
+
+    But breadcrumbs display
+
+    Top
+
+      ↓
+
+    Bottom
+
+    unshift()
+
+    inserts at the beginning,
+
+    avoiding a final reverse().
+    */
+
     path.unshift(current.title);
 
-    if (current.parentId === null) break;
+    if (current.parentId === null) {
 
-    current = idMap.get(current.parentId);
+      break;
+
+    }
+
+    current = idMap.get(
+
+      current.parentId
+
+    );
+
   }
 
-  /**
-   * STEP 4: Join with separator
-   */
-   console.log(path) // [ 'Audio', 'Headphones', 'Wired', 'True wireless', 'Bluetooth' ]
-  return path.join(" >> ");
+  /*
+  ==================================================
+  STEP 4
+
+  BUILD UI STRING
+  ==================================================
+  */
+
+  return path.join(" > ");
+
 }
 
 const breadResult = buildBreadcrumbTrail(breadCrum);
@@ -1758,9 +3029,61 @@ console.log(breadResult); // Audio >> Headphones >> Wired >> True wireless >> Bl
    * When any task finishes, immediately start the next pending task
    * Preserve result order (same index as input)
    * Resolve when all tasks complete
+
+   /*
+    ====================================================
+    WHAT IS A WORKER POOL?
+    ====================================================
+
+    Imagine
+
+    Limit = 2
+
+    Tasks
+
+    T1 T2 T3 T4 T5
+
+    Initially
+
+    Worker 1 → T1
+
+    Worker 2 → T2
+
+    When T2 finishes
+
+    ↓
+
+    Worker 2 immediately starts T3
+
+    When T1 finishes
+
+    ↓
+
+    Worker 1 starts T4
+
+    Workers never stay idle
+    while pending tasks exist.
+
+    This keeps maximum concurrency
+    without exceeding the limit.
+
 */
 
 async function runWithConcurrency(tasks, limit) {
+  /*
+    WHY
+
+    new Array(tasks.length)
+
+    instead of []
+
+    Tasks finish in random order.
+
+    We store each result
+    at its original index.
+
+    This preserves the input order.
+  */
   // 🧺 Stores final results in input order
   const results = new Array(tasks.length);
 
@@ -1800,7 +3123,42 @@ async function runWithConcurrency(tasks, limit) {
        * - Workers are available
        * - Tasks are remaining
        */
+
+      /*
+          WHY while instead of if?
+
+          Suppose
+
+          Limit = 4
+
+          Active = 0
+
+          We should start
+
+          4 workers
+
+          immediately.
+
+          An if statement
+          would only start one worker.
+
+          while fills every
+          available worker slot.
+       */
       while (activeCount < limit && nextTaskIndex < tasks.length) {
+        /*
+          WHY save currentIndex?
+
+          nextIndex keeps changing
+          as more workers start.
+
+          Store the current task index
+
+          before starting the async work,
+
+          otherwise we'd lose
+          the correct position.
+       */
         const currentIndex = nextTaskIndex;
         const task = tasks[currentIndex];
 
@@ -1827,6 +3185,26 @@ async function runWithConcurrency(tasks, limit) {
             results[currentIndex] = { status: "rejected", reason: err};
           })
           .finally(() => {
+            /*
+            WHY finally()?
+
+            Runs whether
+
+            ✔ fulfilled
+
+            or
+
+            ✔ rejected
+
+            A worker becomes free
+            regardless of success
+            or failure.
+
+            Without finally,
+
+            failed tasks might never
+            release a worker.
+          */
             // ⬇️ Worker freed
             activeCount--;
 
@@ -1942,85 +3320,392 @@ runWithConcurrency(tasks, 2).then((results) => {
 */
 
 class TaskRunner {
+
   constructor(concurrency, options = {}) {
-    this.concurrency = concurrency;       // Max parallel tasks
-    this.runningTasks = 0;                // Currently running tasks
-    this.queue = [];                      // Queue to hold pending tasks
 
-    // Optional: backpressure control
-    this.maxQueueSize = options.maxQueueSize ?? Infinity;
+    /*
+    ==================================================
+    MAXIMUM CONCURRENCY
+    ==================================================
 
-    // Used by onIdle() to resolve when everything finishes
+    Maximum number of tasks
+    allowed to run simultaneously.
+
+    Example
+
+    concurrency = 2
+
+    Worker 1
+
+    Worker 2
+
+    Any additional tasks
+
+    wait in the queue.
+    */
+
+    this.concurrency = concurrency;
+
+    /*
+    ==================================================
+    ACTIVE WORKERS
+    ==================================================
+
+    Number of tasks currently running.
+
+    WHY track this?
+
+    Prevent starting more than
+
+    concurrency
+
+    tasks at the same time.
+    */
+
+    this.activeWorkers = 0;
+
+    /*
+    ==================================================
+    WAITING QUEUE
+    ==================================================
+
+    Stores pending tasks.
+
+    WHY queue?
+
+    Suppose
+
+    Concurrency = 2
+
+    Push
+
+    T1
+    T2
+    T3
+    T4
+
+    Only
+
+    T1
+
+    T2
+
+    start immediately.
+
+    T3
+
+    T4
+
+    wait here until
+    a worker becomes free.
+    */
+
+    this.queue = [];
+
+    /*
+    ==================================================
+    BACKPRESSURE
+    ==================================================
+
+    Prevent unlimited queue growth.
+
+    Example
+
+    Producer
+
+    pushes
+
+    100000 tasks
+
+    Workers
+
+    can only process
+
+    100 tasks.
+
+    Without limits,
+
+    memory usage grows forever.
+    */
+
+    this.maxQueueSize =
+      options.maxQueueSize ?? Infinity;
+
+    /*
+    Used by
+
+    onIdle()
+
+    to notify callers
+    when every task
+    has finished.
+    */
+
     this.idleResolvers = [];
+
   }
 
-  // Push a task into the runner
+  // --------------------------------------------------
+  // PUSH
+  // --------------------------------------------------
+
   async push(task) {
-    // Optional safety check: Reject if queue exceeds limit
+
+    /*
+    WHY queue limit?
+
+    Prevent memory explosion
+    when producers generate
+    tasks faster than
+    workers can execute them.
+    */
+
     if (this.queue.length >= this.maxQueueSize) {
+
       throw new Error("Queue overflow");
+
     }
 
-    // If capacity available, run immediately
-    if (this.runningTasks < this.concurrency) {
+    /*
+    Worker available?
+
+    Start immediately.
+
+    Otherwise
+
+    place the task
+    in the waiting queue.
+    */
+
+    if (this.activeWorkers < this.concurrency) {
+
       this.execute(task);
+
     } else {
-      // Else wait in queue
+
       this.queue.push(task);
+
     }
+
   }
 
-  // Core execution logic
+  // --------------------------------------------------
+  // EXECUTE
+  // --------------------------------------------------
+
   async execute(task) {
-    this.runningTasks++;
+
+    /*
+    Reserve a worker.
+    */
+
+    this.activeWorkers++;
 
     try {
-      await task(); // Execute async work
+
+      /*
+      Execute async work.
+
+      TaskRunner is
+
+      fire-and-forget.
+
+      We don't return
+      the task result here.
+      */
+
+      await task();
+
     } catch (err) {
-      // Error should not stop queue processing
+
+      /*
+      WHY catch errors?
+
+      One failed task
+
+      should NOT stop
+
+      the remaining queue.
+
+      Otherwise
+
+      one bad task
+
+      blocks every future task.
+      */
+
       console.error("Task failed:", err);
+
     } finally {
-      this.runningTasks--; // task finish
 
-      // Start next task if possible
-      this.processQueue();
+      /*
+      WHY finally?
 
-      // Resolve onIdle() promises if fully idle
-      if (this.runningTasks === 0 && this.queue.length === 0) {
+      Runs whether
+
+      ✔ success
+
+      ✔ failure
+
+      Every completed task
+
+      frees one worker.
+
+      Without finally,
+
+      failed tasks could
+      permanently reduce
+      available concurrency.
+      */
+
+      this.activeWorkers--;
+
+      /*
+      Start another task
+      if one is waiting.
+      */
+
+      this.scheduleNext();
+
+      /*
+      Idle means
+
+      ✔ No running workers
+
+      ✔ Queue empty
+
+      Notify everyone waiting
+      for completion.
+      */
+
+      if (
+
+        this.activeWorkers === 0 &&
+
+        this.queue.length === 0
+
+      ) {
+
         this.resolveIdle();
+
       }
+
     }
+
   }
 
-  processQueue() {
+  // --------------------------------------------------
+  // SCHEDULE NEXT TASK
+  // --------------------------------------------------
+
+  scheduleNext() {
+
+    /*
+    WHY FIFO?
+
+    Queue follows
+
+    First In
+
+    First Out.
+
+    The oldest waiting task
+
+    executes first.
+    */
+
     if (
+
       this.queue.length > 0 &&
-      this.runningTasks < this.concurrency
+
+      this.activeWorkers < this.concurrency
+
     ) {
+
       const nextTask = this.queue.shift();
+
       this.execute(nextTask);
+
     }
+
   }
 
-  // Allows consumer to await until all tasks finish
+  // --------------------------------------------------
+  // ON IDLE
+  // --------------------------------------------------
+
   onIdle() {
-    if (this.runningTasks === 0 && this.queue.length === 0) {
+
+    /*
+    WHAT does idle mean?
+
+    No running workers
+
+    AND
+
+    Queue is empty.
+
+    Only then
+
+    all work has completed.
+    */
+
+    if (
+
+      this.activeWorkers === 0 &&
+
+      this.queue.length === 0
+
+    ) {
+
       return Promise.resolve();
+
     }
 
-    // Push the resolve function to be called later when idle
+    /*
+    Otherwise
+
+    save the resolver.
+
+    It'll be called later
+    when the runner
+    becomes idle.
+    */
+
     return new Promise(resolve => {
+
       this.idleResolvers.push(resolve);
+
     });
+
   }
 
-// Internal: Resolves all 'onIdle()' waiters when system is idle
+  // --------------------------------------------------
+  // RESOLVE IDLE WAITERS
+  // --------------------------------------------------
+
   resolveIdle() {
+
+    /*
+    Multiple callers
+    may be awaiting
+
+    onIdle().
+
+    Notify all of them.
+    */
+
     while (this.idleResolvers.length > 0) {
-      const resolve = this.idleResolvers.shift();
-      resolve(); // Notify the caller that runner is now idle
+
+      const resolve =
+        this.idleResolvers.shift();
+
+      resolve();
+
     }
+
   }
+
 }
 
 // Helper: delay for given ms
@@ -2144,77 +3829,427 @@ console.log(maskify("Sk#ip#p$5k4y"));
 
 
 // --------------------------------------------------------------
-// 22. MAP LIMIT 
-// -------------------------------------------------------------
+// 22. MAP LIMIT
+// --------------------------------------------------------------
 
-//mapLimit is just a value-to-task adapter on top of a concurrency-controlled executor.
+/*
+====================================================
+WHAT IS mapLimit()?
+====================================================
+
+mapLimit()
+
+behaves like
+
+Array.map()
+
+except
+
+it limits
+
+how many async operations
+
+run simultaneously.
+
+Example
+
+Inputs
+
+[1, 2, 3, 4, 5]
+
+Concurrency = 2
+
+Initially
+
+Worker 1 → 1
+
+Worker 2 → 2
+
+↓
+
+When Worker 2 finishes
+
+↓
+
+Worker 2 → 3
+
+↓
+
+When Worker 1 finishes
+
+↓
+
+Worker 1 → 4
+
+...
+
+Until every value
+has been processed.
+
+====================================================
+
+Worker Pool
+
+↓
+
+Executes
+
+Functions
+
+(() => Promise)
+
+mapLimit
+
+↓
+
+Converts
+
+Values
+
+↓
+
+Functions
+
+↓
+
+Delegates execution
+to Worker Pool.
+
+So
+
+mapLimit
+
+is simply
+
+a value-to-task adapter.
+
+====================================================
+*/
+
+
+// --------------------------------------------------------------
+// WORKER POOL
+// --------------------------------------------------------------
 
 async function runWithConcurrency(tasks, limit) {
+
+  /*
+  WHY preallocate?
+
+  Tasks finish
+  in random order.
+
+  Store every result
+
+  at its original index
+
+  to preserve
+
+  input order.
+  */
+
   const results = new Array(tasks.length);
-  let nextTaskIndex = 0;
-  let activeCount = 0;
+
+  /*
+  Next task
+  waiting to start.
+  */
+
+  let nextIndex = 0;
+
+  /*
+  Currently running workers.
+  */
+
+  let activeWorkers = 0;
 
   return new Promise((resolve) => {
+
     function runNext() {
-      // ✅ All done
-      if (nextTaskIndex === tasks.length && activeCount === 0) {
+
+      /*
+      No waiting tasks.
+
+      No active workers.
+
+      Everything finished.
+      */
+
+      if (
+
+        nextIndex === tasks.length &&
+
+        activeWorkers === 0
+
+      ) {
+
         resolve(results);
+
         return;
+
       }
 
-      while (activeCount < limit && nextTaskIndex < tasks.length) {
-        const currentIndex = nextTaskIndex;
+      /*
+      WHY while?
+
+      Fill EVERY available worker.
+
+      Example
+
+      limit = 4
+
+      Active = 0
+
+      We should immediately
+      start
+
+      four tasks.
+
+      An if statement
+
+      would only start one.
+      */
+
+      while (
+
+        activeWorkers < limit &&
+
+        nextIndex < tasks.length
+
+      ) {
+
+        /*
+        WHY save currentIndex?
+
+        nextIndex changes
+
+        as new workers start.
+
+        Save it now
+
+        so we know where
+        this task's result belongs.
+        */
+
+        const currentIndex = nextIndex;
+
         const task = tasks[currentIndex];
 
-        nextTaskIndex++;
-        activeCount++;
+        nextIndex++;
+
+        activeWorkers++;
 
         task()
+
           .then((value) => {
-            results[currentIndex] = { status: "fulfilled", value };
+
+            results[currentIndex] = {
+
+              status: "fulfilled",
+
+              value
+
+            };
+
           })
-          .catch((err) => {
-            results[currentIndex] = { status: "rejected", error: err };
+
+          .catch((error) => {
+
+            /*
+            Similar to
+
+            Promise.allSettled()
+
+            Store failure
+
+            instead of rejecting
+            the whole execution.
+            */
+
+            results[currentIndex] = {
+
+              status: "rejected",
+
+              reason: error
+
+            };
+
           })
+
           .finally(() => {
-            activeCount--;
-            runNext(); // 🔁 start next waiting task
+
+            /*
+            WHY finally()?
+
+            Runs whether
+
+            ✔ fulfilled
+
+            ✔ rejected
+
+            A worker becomes free
+
+            regardless of success
+            or failure.
+            */
+
+            activeWorkers--;
+
+            runNext();
+
           });
+
       }
+
     }
 
     runNext();
+
   });
+
 }
 
 
 
-function mapLimit(inputs, limit, mapper, done) {
-  /**
-   * STEP 1️⃣
-   * Convert each input value into a function
-   * WHY?
-   * runWithConcurrency expects: () => Promise
-   */
-  const tasks = inputs.map((item) => {
-    return () => mapper(item);
-  });
+// --------------------------------------------------------------
+// MAP LIMIT
+// --------------------------------------------------------------
 
-  /**
-   * STEP 2️⃣
-   * Delegate concurrency handling to runWithConcurrency
-   */
-  runWithConcurrency(tasks, limit)
-    .then((results) => {
-      // STEP 3️⃣ success callback
-      done(null, results);
+function mapLimit(
+
+  inputs,
+
+  limit,
+
+  mapper,
+
+  done
+
+) {
+
+  /*
+  STEP 1
+
+  Convert
+
+  Values
+
+      ↓
+
+  Async Tasks
+
+  WHY?
+
+  Worker Pool knows
+  how to execute
+
+  functions.
+
+  It doesn't know
+  anything about values.
+  */
+
+  const tasks = inputs.map(
+
+    value =>
+
+      () => mapper(value)
+
+  );
+
+  /*
+  STEP 2
+
+  Delegate execution.
+
+  mapLimit()
+
+  doesn't implement
+  concurrency.
+
+  Worker Pool does.
+  */
+
+  runWithConcurrency(
+
+    tasks,
+
+    limit
+
+  )
+
+    .then(results => {
+
+      done(
+
+        null,
+
+        results
+
+      );
+
     })
-    .catch((err) => {
-      // STEP 4️⃣ error callback
-      done(err);
+
+    .catch(error => {
+
+      /*
+      Normally won't happen
+
+      because Worker Pool
+
+      collects errors
+
+      similar to
+
+      Promise.allSettled().
+
+      Added for safety.
+      */
+
+      done(error);
+
     });
+
 }
 
+
+    // inputs
+
+    // [1, 2, 3, 4, 5]
+
+    //         │
+    //         ▼
+
+    // mapper(value)
+
+    //         │
+
+    // 1 → Promise
+    // 2 → Promise
+    // 3 → Promise
+    // 4 → Promise
+    // 5 → Promise
+
+    //         │
+
+    // Convert into lazy tasks
+
+    // () => mapper(1)
+    // () => mapper(2)
+    // () => mapper(3)
+    // () => mapper(4)
+    // () => mapper(5)
+
+    //         │
+
+    // Worker Pool
+
+    // (concurrency = 2)
+
+    //         │
+    // Runs only two tasks at a time    
+
+    // "mapLimit doesn't know what operation to perform on each input. The mapper callback defines the asynchronous work for each value. We wrap it as () => mapper(value) so the work is lazy—it doesn't start until the worker pool schedules it. If we created the Promises immediately, the concurrency limit would be ineffective because all async operations would already be running."
 
 
 function mapper(x) {
@@ -2478,298 +4513,1320 @@ console.log(sum(1)(2)(3)(4)); // 10
 
 
 // --------------------------------------------------------------
-   // 25. STORE CLASS
-   /**
+// 25. STORE CLASS
+// --------------------------------------------------------------
+
+    /*
+    ====================================================
+    INTERVIEW QUESTION
+    ====================================================
+
     Design a Store class that supports:
 
-      1️⃣ subscribe(key, onUpdate, onCleanup)
-          Subscribe to changes for a specific key.
-          onUpdate(value) → called whenever the value for that key changes.
-          onCleanup() → called when the subscription is removed.
-          Must return a cleanup function that unsubscribes only that subscriber.
+    1️⃣ subscribe(key, onUpdate, onCleanup)
 
-      2️⃣ save(key, value)
-         Save a value for a key.
-         Notify all subscribers of that key immediately.
+    Subscribe to changes for a specific key.
 
-      3️⃣ remove(key)
-          Remove the key from the store.
-         Clean up all subscriptions for that key.
+    onUpdate(value)
+
+    Called whenever the value changes.
+
+    onCleanup()
+
+    Called when this subscription
+    is removed.
+
+    Must return a cleanup function
+    that unsubscribes ONLY
+    this subscriber.
+
+    ----------------------------------------------------
+
+    2️⃣ save(key, value)
+
+    Save a value.
+
+    Immediately notify every
+    subscriber of that key.
+
+    ----------------------------------------------------
+
+    3️⃣ remove(key)
+
+    Remove the key completely.
+
+    Delete its stored value
+
+    AND
+
+    clean up every subscriber.
+
+    ====================================================
+
+
+    WHAT IS A STORE?
+
+    A Store is a centralized place
+    to keep application state.
+
+    Instead of components asking
+
+    "Has the value changed?"
+
+    the Store automatically pushes
+    updates to subscribers.
+
+    This is an example of the
+
+    Observer Pattern
+
+    Publisher
+
+    ↓
+
+    Subscribers
+
+    Examples
+
+    ✔ Redux
+
+    ✔ Zustand
+
+    ✔ MobX
+
+    ✔ Vuex
+
+    ✔ Pinia
+
+    ====================================================
     */
-// -------------------------------------------------------------
 
-class Store {
-  constructor() {
-    /**
-     * 🗄 Internal cache
-     * key → value
-     */
-    this.data = new Map();
+    class Store {
 
-    /**
-     * 👂 Subscribers map
-     * key → Set of subscriber objects
-     *
-     * Each subscriber:
-     * {
-     *   onUpdate: function,
-     *   onCleanup: function
-     * }
-     */
-    this.subscribers = new Map();
-  }
+      constructor() {
 
-  /**
-   * 🔔 Subscribe to updates for a key
-   */
-  subscribe(key, onUpdate, onCleanup) {
-    // ✅ Ensure subscriber list exists for the key
-    if (!this.subscribers.has(key)) {
-      this.subscribers.set(key, new Set());
-    }
+        /*
+        ==================================================
+        STORE DATA
+        ==================================================
 
-    const subscriber = { onUpdate, onCleanup };
-    this.subscribers.get(key).add(subscriber);
+        key
 
-    /**
-     * ⚡ Immediately notify if value already exists
-     * (important edge case — avoids stale UI)
-     */
-    if (this.data.has(key)) {
-      onUpdate(this.data.get(key));
-    }
+            ↓
 
-    /**
-     * 🧹 Return cleanup function
-     * Removes ONLY this subscriber
-     */
-    return () => {
-      const subs = this.subscribers.get(key);
-      if (!subs) return;
+        latest value
 
-      subs.delete(subscriber);
+        WHY Map?
 
-      // Call cleanup if provided
-      if (onCleanup) {
-        onCleanup();
+        O(1)
+
+        lookup
+
+        insert
+
+        delete
+        */
+
+        this.data = new Map();
+
+        /*
+        ==================================================
+        SUBSCRIBERS
+        ==================================================
+
+        Structure
+
+        key
+
+            ↓
+
+        Set
+
+            ↓
+
+        {
+          onUpdate,
+          onCleanup
+        }
+
+        WHY Map?
+
+        Quickly find
+        subscribers
+        for one key.
+
+        WHY Set?
+
+        ✔ O(1) add
+
+        ✔ O(1) delete
+
+        ✔ Prevents duplicate
+          subscriber references.
+        */
+
+        this.subscribers = new Map();
+
       }
 
-      // 🧠 Memory optimization:
-      // Remove key if no subscribers left
-      if (subs.size === 0) {
+      // --------------------------------------------------
+      // SUBSCRIBE
+      // --------------------------------------------------
+
+      subscribe(
+
+        key,
+
+        onUpdate,
+
+        onCleanup
+
+      ) {
+
+        /*
+        Defensive programming.
+
+        Avoid runtime errors later
+        during notifications.
+        */
+
+        if (typeof onUpdate !== "function") {
+
+          throw new TypeError(
+
+            "onUpdate must be a function."
+
+          );
+
+        }
+
+        /*
+        First subscriber
+        for this key?
+
+        Create a Set.
+        */
+
+        if (!this.subscribers.has(key)) {
+
+          this.subscribers.set(
+
+            key,
+
+            new Set()
+
+          );
+
+        }
+
+        /*
+        WHY wrap callbacks
+        into one object?
+
+        Makes it easy
+        to remove
+
+        THIS
+
+        subscriber later.
+        */
+
+        const subscriber = {
+
+          onUpdate,
+
+          onCleanup
+
+        };
+
+        this.subscribers
+          .get(key)
+          .add(subscriber);
+
+        /*
+        WHY immediately notify?
+
+        Example
+
+        save("user", John)
+
+        happened BEFORE
+
+        subscribe()
+
+        A new subscriber should
+        immediately receive
+
+        John
+
+        Otherwise
+
+        the UI starts with
+        stale data.
+        */
+
+        if (this.data.has(key)) {
+
+          onUpdate(
+
+            this.data.get(key)
+
+          );
+
+        }
+
+        /*
+        Return cleanup function.
+
+        IMPORTANT
+
+        Removes ONLY
+
+        this subscriber.
+
+        Other subscribers
+        continue receiving updates.
+        */
+
+        return () => {
+
+          const subs =
+
+            this.subscribers.get(key);
+
+          if (!subs) return;
+
+          subs.delete(subscriber);
+
+          /*
+          Notify cleanup.
+          */
+
+          try {
+
+            onCleanup?.();
+
+          } catch (err) {
+
+            console.error(
+
+              "Cleanup error:",
+
+              err
+
+            );
+
+          }
+
+          /*
+          Memory optimization.
+
+          Remove empty Sets.
+
+          Prevent unused keys
+          from staying in memory.
+          */
+
+          if (subs.size === 0) {
+
+            this.subscribers.delete(key);
+
+          }
+
+        };
+
+      }
+
+      // --------------------------------------------------
+      // SAVE
+      // --------------------------------------------------
+
+      save(key, value) {
+
+        /*
+        Store latest value.
+        */
+
+        this.data.set(
+
+          key,
+
+          value
+
+        );
+
+        const subs =
+
+          this.subscribers.get(key);
+
+        /*
+        Nobody listening.
+
+        Nothing else to do.
+        */
+
+        if (!subs) return;
+
+        /*
+        Notify every subscriber.
+
+        WHY try/catch?
+
+        One subscriber crashing
+
+        should NOT stop
+
+        other subscribers
+        from receiving updates.
+        */
+
+        subs.forEach(
+
+          ({ onUpdate }) => {
+
+            try {
+
+              onUpdate(value);
+
+            } catch (err) {
+
+              console.error(
+
+                "Subscriber error:",
+
+                err
+
+              );
+
+            }
+
+          }
+
+        );
+
+      }
+
+      // --------------------------------------------------
+      // REMOVE
+      // --------------------------------------------------
+
+      remove(key) {
+
+        /*
+        Remove stored value.
+        */
+
+        this.data.delete(key);
+
+        const subs =
+
+          this.subscribers.get(key);
+
+        if (!subs) return;
+
+        /*
+        WHY cleanup?
+
+        Components may need
+        to release resources.
+
+        Example
+
+        Remove timers
+
+        Remove sockets
+
+        Remove DOM listeners
+        */
+
+        subs.forEach(
+
+          ({ onCleanup }) => {
+
+            try {
+
+              onCleanup?.();
+
+            } catch (err) {
+
+              console.error(
+
+                "Cleanup error:",
+
+                err
+
+              );
+
+            }
+
+          }
+
+        );
+
+        /*
+        Remove every subscriber
+        for this key.
+        */
+
         this.subscribers.delete(key);
+
       }
-    };
-  }
 
-  /**
-   * 💾 Save value & notify subscribers
-   */
-  save(key, value) {
-    this.data.set(key, value);
+    }
 
-    const subs = this.subscribers.get(key);
-    if (!subs) return;
+    /*
+    ====================================================
 
-    // Notify all subscribers
-    subs.forEach(({ onUpdate }) => {
-      try {
-        onUpdate(value);
-      } catch (err) {
-        console.error("Subscriber error:", err);
-      }
-    });
-  }
+    TEST CASE 1
 
-  /**
-   * ❌ Remove key and cleanup all subscribers
-   */
-  remove(key) {
-    this.data.delete(key);
+    Basic subscribe
 
-    const subs = this.subscribers.get(key);
-    if (!subs) return;
-
-    // Call cleanup for each subscriber
-    subs.forEach(({ onCleanup }) => {
-      if (onCleanup) {
-        onCleanup();
-      }
-    });
-
-    // Remove all subscribers for the key
-    this.subscribers.delete(key);
-  }
-}
-
-
-/* TEST CASE */
-const store = new Store();
-
-const unsubscribe = store.subscribe(
-  "user",
-  (value) => {
-    console.log("🔄 User updated:", value);
-  },
-  () => {
-    console.log("🧹 User subscription cleaned");
-  }
-);
-
-store.save("user", { name: "Sumeeth", age: 25 });
-// 🔄 User updated: { name: "Sumeeth", age: 25 }
-
-unsubscribe();
-// 🧹 User subscription cleaned
-
-store.save("user", { name: "Updated" });
-// ❌ No update (unsubscribed)
-
-
-// --------------------------------------------------------------
-   // 25. STORE CLASS
-   /**
-    🚕 Uber Driver – Chainable Class with Priority Execution
-
-  🔥 Problem Statement (Clean Restate)
-    Design a chainable JavaScript class UberDriver with methods like:
-      pick(name, location)
-      drive(minutes)
-      drop()
-      rest(minutes)
-      coffeeBreak(minutes) ← must always execute first
-      status()
+    ====================================================
     */
 
-    // SINCE EXECUTION ORDER MATTERS AND ASYNC IS INVOLVED WE'LL USE PROMISES
-// -------------------------------------------------------------
+    const store = new Store();
 
-class UberDriver {
-  constructor() {
-    this.queue = [];  // 🚕 normal tasks
-    this.priorityQueue = []; // 🚨 coffeeBreak tasks
+    const unsubscribe = store.subscribe(
 
-    this.currentPassenger = null;
-    this.location = null;
-    
-    // 🕒 Start execution after chaining completes
-    Promise.resolve().then(() => this.run());
-  }
+      "user",
 
-  async run() {
-    // 1️⃣ Run priority tasks first
-    for (const task of this.priorityQueue) {
-      await task();
+      value => {
+
+        console.log(
+
+          "🔄 User updated:",
+
+          value
+
+        );
+
+      },
+
+      () => {
+
+        console.log(
+
+          "🧹 User subscription cleaned"
+
+        );
+
+      }
+
+    );
+
+    store.save(
+
+      "user",
+
+      {
+
+        name: "Sumeeth",
+
+        age: 25
+
+      }
+
+    );
+
+    // 🔄 User updated...
+
+    unsubscribe();
+
+    // 🧹 User subscription cleaned
+
+    store.save(
+
+      "user",
+
+      {
+
+        name: "Updated"
+
+      }
+
+    );
+
+    // No update
+
+
+
+    /*
+    ====================================================
+
+    TEST CASE 2
+
+    Multiple subscribers
+
+    ====================================================
+    */
+
+    const removeOne = store.subscribe(
+
+      "theme",
+
+      value =>
+
+        console.log(
+
+          "🎨 Component A:",
+
+          value
+
+        ),
+
+      () =>
+
+        console.log(
+
+          "🧹 Component A removed"
+
+        )
+
+    );
+
+    store.subscribe(
+
+      "theme",
+
+      value =>
+
+        console.log(
+
+          "🎨 Component B:",
+
+          value
+
+        ),
+
+      () =>
+
+        console.log(
+
+          "🧹 Component B removed"
+
+        )
+
+    );
+
+    store.save(
+
+      "theme",
+
+      "Dark"
+
+    /*
+
+    Both subscribers receive
+
+    Dark
+
+    */
+
+    );
+
+    removeOne();
+
+    store.save(
+
+      "theme",
+
+      "Light"
+
+    /*
+
+    Only Component B
+
+    receives update.
+
+    */
+
+    );
+
+
+
+    /*
+    ====================================================
+
+    TEST CASE 3
+
+    Late subscription
+
+    ====================================================
+    */
+
+    store.save(
+
+      "language",
+
+      "JavaScript"
+
+    );
+
+    store.subscribe(
+
+      "language",
+
+      value =>
+
+        console.log(
+
+          "📘 Current:",
+
+          value
+
+        )
+
+    );
+
+    /*
+
+    Immediately prints
+
+    JavaScript
+
+    WHY?
+
+    Because the Store
+    already had the value.
+
+    */
+
+
+
+    /*
+    ====================================================
+
+    TEST CASE 4
+
+    remove()
+
+    ====================================================
+    */
+
+    store.subscribe(
+
+      "session",
+
+      value =>
+
+        console.log(
+
+          "Session:",
+
+          value
+
+        ),
+
+      () =>
+
+        console.log(
+
+          "Session cleaned"
+
+        )
+
+    );
+
+    store.save(
+
+      "session",
+
+      "Active"
+
+    );
+
+    store.remove(
+
+      "session"
+
+    );
+
+    /*
+
+    Cleanup runs.
+
+    Future saves
+
+    won't notify anyone.
+
+    */
+
+    store.save(
+
+      "session",
+
+      "New Session"
+
+    );
+
+
+    // --------------------------------------------------------------
+    // 26. UBER DRIVER (CHAINABLE CLASS)
+    // --------------------------------------------------------------
+
+    /*
+    ====================================================
+
+    INTERVIEW QUESTION
+
+    ====================================================
+
+    Design a chainable JavaScript class
+    UberDriver with methods:
+
+    ✔ pick(name, location)
+
+    ✔ drive(minutes)
+
+    ✔ drop()
+
+    ✔ rest(minutes)
+
+    ✔ coffeeBreak(minutes)
+
+    ✔ status()
+
+    Requirements
+
+    1.
+
+    Methods should be chainable.
+
+    driver
+      .pick(...)
+      .drive(...)
+      .drop()
+
+    2.
+
+    Execution order matters.
+
+    3.
+
+    Some operations are asynchronous.
+
+    4.
+
+    coffeeBreak()
+
+    must ALWAYS execute before
+    every normal task.
+
+    ====================================================
+
+    WHY USE A QUEUE?
+
+    If every method executed immediately,
+
+    driver
+        .pick()
+        .drive()
+        .drop()
+
+    would start running
+    while chaining is still happening.
+
+    Instead,
+
+    every method
+
+    ADDS
+
+    a task into a queue.
+
+    Only after chaining finishes
+
+    do we execute the queue.
+
+    This is exactly how
+
+    Promise chains
+
+    middleware
+
+    and command queues
+
+    work.
+
+    ====================================================
+    */
+
+    class UberDriver {
+
+      constructor() {
+
+        /*
+        ==================================================
+        NORMAL TASKS
+        ==================================================
+
+        Stores actions in
+
+        FIFO
+
+        order.
+
+        Example
+
+        pick
+
+        drive
+
+        drop
+
+        */
+
+        this.queue = [];
+
+        /*
+        ==================================================
+        PRIORITY TASKS
+        ==================================================
+
+        Some operations
+
+        must execute before
+
+        every normal task.
+
+        Example
+
+        coffeeBreak()
+
+        So we maintain
+
+        a separate queue.
+        */
+
+        this.priorityQueue = [];
+
+        /*
+        Driver state.
+        */
+
+        this.currentPassenger = null;
+
+        this.location = null;
+
+        /*
+        WHY Promise.resolve()?
+
+        It delays execution
+
+        until the current
+        synchronous code finishes.
+
+        Example
+
+        new UberDriver()
+
+          .pick()
+
+          .drive()
+
+          .drop()
+
+        Constructor executes first.
+
+        All chained methods
+
+        finish adding tasks.
+
+        THEN
+
+        run() starts.
+
+        Without this,
+
+        run()
+
+        would execute immediately
+
+        before the chain completes.
+        */
+
+        Promise.resolve()
+
+          .then(() => this.run());
+
+      }
+
+      // --------------------------------------------------
+      // EXECUTE QUEUES
+      // --------------------------------------------------
+
+      async run() {
+
+        /*
+        Execute every
+
+        priority task
+
+        first.
+        */
+
+        for (const task of this.priorityQueue) {
+
+          await task();
+
+        }
+
+        /*
+        Then execute
+
+        normal tasks
+
+        in insertion order.
+        */
+
+        for (const task of this.queue) {
+
+          await task();
+
+        }
+
+      }
+
+      // --------------------------------------------------
+      // DELAY
+      // --------------------------------------------------
+
+      delay(seconds) {
+
+        /*
+        Helper used by
+
+        drive()
+
+        rest()
+
+        coffeeBreak()
+        */
+
+        return new Promise(resolve =>
+
+          setTimeout(
+
+            resolve,
+
+            seconds * 1000
+
+          )
+
+        );
+
+      }
+
+      // --------------------------------------------------
+      // PICK
+      // --------------------------------------------------
+
+      pick(name, location) {
+
+        this.queue.push(async () => {
+
+          /*
+          Driver already busy?
+          */
+
+          if (this.currentPassenger) {
+
+            console.log(
+
+              `❌ Already driving ${this.currentPassenger}`
+
+            );
+
+            return;
+
+          }
+
+          this.currentPassenger = name;
+
+          this.location = location;
+
+          console.log(
+
+            `🚕 Picked up ${name} at location ${location}`
+
+          );
+
+        });
+
+        /*
+        WHY return this?
+
+        Enables chaining.
+
+        driver
+
+          .pick()
+
+          .drive()
+
+          .drop()
+        */
+
+        return this;
+
+      }
+
+      // --------------------------------------------------
+      // DRIVE
+      // --------------------------------------------------
+
+      drive(minutes) {
+
+        this.queue.push(async () => {
+
+          if (!this.currentPassenger) {
+
+            console.log(
+
+              "⚠️ No passenger to drive"
+
+            );
+
+            return;
+
+          }
+
+          console.log(
+
+            `🚗 Driving ${this.currentPassenger} for ${minutes} minutes`
+
+          );
+
+          await this.delay(minutes);
+
+        });
+
+        return this;
+
+      }
+
+      // --------------------------------------------------
+      // STATUS
+      // --------------------------------------------------
+
+      status() {
+
+        this.queue.push(async () => {
+
+          if (this.currentPassenger) {
+
+            console.log(
+
+              `📊 On trip with ${this.currentPassenger}`
+
+            );
+
+          } else {
+
+            console.log(
+
+              "📊 Driver is idle"
+
+            );
+
+          }
+
+        });
+
+        return this;
+
+      }
+
+      // --------------------------------------------------
+      // DROP
+      // --------------------------------------------------
+
+      drop() {
+
+        this.queue.push(async () => {
+
+          if (!this.currentPassenger) {
+
+            console.log(
+
+              "⚠️ No passenger to drop"
+
+            );
+
+            return;
+
+          }
+
+          console.log(
+
+            `📍 Dropped ${this.currentPassenger}`
+
+          );
+
+          this.currentPassenger = null;
+
+          this.location = null;
+
+        });
+
+        return this;
+
+      }
+
+      // --------------------------------------------------
+      // REST
+      // --------------------------------------------------
+
+      rest(minutes) {
+
+        this.queue.push(async () => {
+
+          console.log(
+
+            `😴 Resting for ${minutes} minutes`
+
+          );
+
+          await this.delay(minutes);
+
+        });
+
+        return this;
+
+      }
+
+      // --------------------------------------------------
+      // PRIORITY TASK
+      // --------------------------------------------------
+
+      coffeeBreak(minutes) {
+
+        /*
+        WHY separate queue?
+
+        Requirement says
+
+        coffeeBreak()
+
+        must always execute
+
+        before
+
+        normal tasks.
+
+        */
+
+        this.priorityQueue.push(async () => {
+
+          console.log(
+
+            `☕ Coffee break for ${minutes} minutes`
+
+          );
+
+          await this.delay(minutes);
+
+        });
+
+        return this;
+
+      }
+
     }
-    
-    // 2️⃣ Then run normal tasks
-    for (const task of this.queue) {
-      await task();
-    }
-  }
 
-  delay(seconds) {
-    return new Promise(res => setTimeout(res, seconds * 1000));
-  }
+    /*
+    ====================================================
 
-  /* ---------------- Actions OR Chainable APIs ---------------- */
+    TEST CASE 1
 
-  pick(name, location) {
-    this.queue.push(async () => {
-      if (this.currentPassenger) {
-        console.log(`❌ Already driving ${this.currentPassenger}`);
-        return;
-      }
+    ====================================================
+    */
 
-      this.currentPassenger = name;
-      this.location = location;
-      console.log(`🚕 Picked up ${name} at location ${location}`);
-    });
-    return this;
-  }
+    new UberDriver()
 
-  drive(minutes) {
-    this.queue.push(async () => {
-      if (!this.currentPassenger) {
-        console.log(`⚠️ No passenger to drive`);
-        return;
-      }
+      .pick("Alice", 1)
 
-      console.log(`🚗 Driving ${this.currentPassenger} for ${minutes} minutes`);
-      await this.delay(minutes);
-    });
-    return this;
-  }
+      .status()
 
-  status() {
-    this.queue.push(async () => {
-      if (this.currentPassenger) {
-        console.log(`📊 On trip with ${this.currentPassenger}`);
-      } else {
-        console.log(`📊 Driver is idle`);
-      }
-    });
-    return this;
-  }
+      .drive(2)
 
-  drop() {
-    this.queue.push(async () => {
-      if (!this.currentPassenger) {
-        console.log(`⚠️ No passenger to drop`);
-        return;
-      }
+      .drop()
 
-      console.log(`📍 Dropped ${this.currentPassenger}`);
-      this.currentPassenger = null;
-      this.location = null;
-    });
-    return this;
-  }
+      .status()
 
-  rest(minutes) {
-    this.queue.push(async () => {
-      console.log(`😴 Resting for ${minutes} minutes`);
-      await this.delay(minutes);
-    });
-    return this;
-  }
+      .pick("Bob", 2)
 
-  /* ---------------- Priority Method ---------------- */
+      .coffeeBreak(1)
 
-  coffeeBreak(minutes) {
-    this.priorityQueue.push(async () => {
-      console.log(`☕ Coffee break for ${minutes} minutes`);
-      await this.delay(minutes);
-    });
-    return this;
-  }
-}
+      .drive(1)
+
+      .drop();
 
 
-new UberDriver()
-  .pick("Alice", 1)
-  .status()
-  .drive(2)
-  .drop()
-  .status()
-  .pick("Bob", 2)
-  .coffeeBreak(1)   // 👈 Executes FIRST
-  .drive(1)
-  .drop();
+    /*
+    Expected
 
-// OUTPUT
-
-// ☕ Coffee break for 1 minutes
-// 🚕 Picked up Alice at location 1
-// 📊 On trip with Alice
-// 🚗 Driving Alice for 2 minutes
-// 📍 Dropped Alice
-// 📊 Driver is idle
-// 🚕 Picked up Bob at location 2
-// 🚗 Driving Bob for 1 minutes
-// 📍 Dropped Bob
+    "☕ Coffee break for 1 minutes"
+    "🚕 Picked up Alice at location 1"
+    "📊 On trip with Alice"
+    "🚗 Driving Alice for 2 minutes"
+    "📍 Dropped Alice"
+    "📊 Driver is idle"
+    "🚕 Picked up Bob at location 2"
+    "🚗 Driving Bob for 1 minutes"
+    "📍 Dropped Bob"
+    */
 
 
+    /*
+    ====================================================
+
+    TEST CASE 2
+
+    Driver already busy
+
+    ====================================================
+    */
+
+    new UberDriver()
+
+      .pick("Alice", 1)
+
+      .pick("Bob", 2)
+
+      .drop();
+
+    /*
+
+    "🚕 Picked up Alice at location 1"
+    "❌ Already driving Alice"
+    "📍 Dropped Alice"
+
+    */
+
+
+    /*
+    ====================================================
+
+    TEST CASE 3
+
+    Drive without passenger
+
+    ====================================================
+    */
+
+    new UberDriver()
+
+      .drive(2)
+
+      .drop();
+
+    /*
+
+    ⚠️ No passenger to drive
+    ⚠️ No passenger to drop
+
+    */
 
 // --------------------------------------------------------------
    // 26. CUSTOM JSON.STRINGIFY()
@@ -2909,319 +5966,1080 @@ try {
 
 
 // --------------------------------------------------------------
-   // 27. Topological Sort with Cycle Detection (DFS)
-   /**
-     * - Detects circular dependencies
-     * - Returns correct execution order
-  */
-// -------------------------------------------------------------
+// 27. DAG TASK SCHEDULER
+// (Topological Sort + Cycle Detection + Concurrency)
+// --------------------------------------------------------------
 
-// 🕒 Simulated delay utility
+/*
+====================================================
+
+INTERVIEW QUESTION
+
+====================================================
+
+Given a graph where
+
+Nodes
+
+↓
+
+Async Tasks
+
+Edges
+
+↓
+
+Dependencies
+
+Execute every task such that
+
+✔ Dependencies execute first
+
+✔ Detect cycles
+
+✔ Run independent tasks in parallel
+
+✔ Respect a concurrency limit
+
+====================================================
+
+WHY TOPOLOGICAL SORT?
+
+Suppose
+
+A
+
+↓
+
+B
+
+↓
+
+C
+
+C
+
+cannot execute before
+
+B
+
+B
+
+cannot execute before
+
+A
+
+Topological Sort gives
+
+a valid execution order
+
+for a DAG
+
+(Directed Acyclic Graph).
+
+====================================================
+*/
+
+
+// --------------------------------------------------
+// Simulated async work
+// --------------------------------------------------
+
 function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+
+  return new Promise(resolve =>
+
+    setTimeout(resolve, ms)
+
+  );
+
 }
 
+
+// --------------------------------------------------
+// TOPOLOGICAL SORT
+// (DFS + Cycle Detection)
+// --------------------------------------------------
+
 function resolveDependenciesWithCycleDetection(graph) {
+
+  /*
+  All task ids.
+  */
+
   const nodes = Object.keys(graph);
+
+  /*
+  Already processed.
+
+  Never visit again.
+  */
+
   const visited = new Set();
-  const recStack = new Set();
+
+  /*
+  Current DFS path.
+
+  Visiting the same node again
+
+  means
+
+  Cycle.
+  */
+
+  const visiting = new Set();
+
+  /*
+  DFS finishes children first.
+
+  Produces
+
+  Reverse Topological Order.
+  */
+
   const topoOrder = [];
 
   function dfs(node) {
-    // 🚨 Cycle detected
-    if (recStack.has(node)) {
-      throw new Error(`Cycle detected at node: ${node}`);
+
+    /*
+    Defensive check.
+
+    Missing dependency.
+    */
+
+    if (!graph[node]) {
+
+      throw new Error(
+
+        `Unknown task: ${node}`
+
+      );
+
     }
 
-    // Already processed
-    if (visited.has(node)) return;
+    /*
+    Visiting again
+
+    inside current recursion
+
+    means
+
+    Cycle.
+
+    Example
+
+    A
+
+    ↓
+
+    B
+
+    ↓
+
+    C
+
+    ↓
+
+    A
+    */
+
+    if (visiting.has(node)) {
+
+      throw new Error(
+
+        `Cycle detected at ${node}`
+
+      );
+
+    }
+
+    /*
+    Already processed.
+
+    Skip.
+    */
+
+    if (visited.has(node)) {
+
+      return;
+
+    }
 
     visited.add(node);
-    recStack.add(node);
 
-    // Visit dependencies first
-    for (const dep of graph[node].dependency || []) {
+    visiting.add(node);
+
+    /*
+    Process dependencies first.
+    */
+
+    const dependencies =
+
+      graph[node].dependency ?? [];
+
+    for (const dep of dependencies) {
+
       dfs(dep);
+
     }
 
-    recStack.delete(node);
-    topoOrder.push(node); // Post-order
+    /*
+    Leaving recursion.
+
+    Remove from current path.
+    */
+
+    visiting.delete(node);
+
+    /*
+    WHY push here?
+
+    DFS pushes AFTER
+
+    dependencies finish.
+
+    Produces
+
+    Reverse Topological Order.
+    */
+
+    topoOrder.push(node);
+
   }
 
   for (const node of nodes) {
+
     if (!visited.has(node)) {
+
       dfs(node);
+
     }
+
   }
 
-  // 🔑 IMPORTANT FIX: reverse post-order for correct topo order
+  /*
+  WHY reverse?
+
+  DFS produced
+
+  Reverse Topological Order.
+
+  Reverse it
+
+  to obtain
+
+  Dependency
+
+      ↓
+
+  Dependent
+
+  execution order.
+
+  Example
+
+  DFS
+
+  D
+
+  B
+
+  A
+
+  Reverse
+
+  A
+
+  B
+
+  D
+  */
+
   return topoOrder.reverse();
+
 }
 
-/**
- * 🚀 Execute tasks with:
- * - Dependency enforcement
- * - Concurrency limit
- */
-function executeTasksInParallel(order, graph, limit = 2) {
-  let activeTasks = 0;
+
+// --------------------------------------------------
+// TASK EXECUTOR
+// --------------------------------------------------
+
+function executeTasksInParallel(
+
+  order,
+
+  graph,
+
+  limit = 2
+
+) {
+
+  /*
+  Running workers.
+  */
+
+  let activeWorkers = 0;
+
+  /*
+  Finished tasks.
+  */
+
   const completed = new Set();
+
+  /*
+  Tasks waiting to execute.
+
+  WHY Set?
+
+  O(1)
+
+  add
+
+  delete
+
+  lookup.
+  */
+
   const pending = new Set(order);
 
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
 
-  /**
-   * ✅ canRun(taskId)
-   * ------------------------------------------------
-   * Checks whether a task is eligible to run
-   *
-   * A task can run ONLY IF:
-   * - It has no dependencies OR
-   * - All its dependencies are already completed
-   */
-  function canRun(taskId) {
-    return (
-      // Get dependencies array (fallback to empty if undefined)
-      (graph[taskId].dependency || [])
-        // every() ensures ALL dependencies are completed
-        .every((dep) => completed.has(dep))
-    );
-  }
+    /*
+    --------------------------------------
+    Can this task execute?
+    --------------------------------------
 
-  /**
-   * 🚀 executeNext()
-   * ------------------------------------------------
-   * Core scheduler function:
-   * - Picks runnable tasks
-   * - Respects concurrency limit
-   * - Triggers next execution when a task finishes
-   */
-  function executeNext() {
+    Every dependency
 
-    /**
-     * 🛑 BASE CASE (Termination Condition)
-     *
-     * When:
-     * - No pending tasks left AND
-     * - No active (running) tasks
-     *
-     * ➜ Entire workflow is complete
-     */
-    if (pending.size === 0 && activeTasks === 0) {
-      resolve(); // Resolve outer Promise
-      return;
+    must already
+
+    be completed.
+    */
+
+    function canRun(taskId) {
+
+      return (
+
+        graph[taskId].dependency ?? []
+
+      ).every(dep =>
+
+        completed.has(dep)
+
+      );
+
     }
 
-    /**
-     * 🔁 Iterate over pending tasks
-     *
-     * IMPORTANT:
-     * - We spread into a new array to avoid mutating
-     *   the Set while iterating
-     */
-    for (const taskId of [...pending]) {
+    /*
+    --------------------------------------
+    Scheduler
+    --------------------------------------
 
-      /**
-       * ⛔ Concurrency Guard
-       *
-       * If we already reached the max allowed parallel tasks,
-       * stop scheduling more for now.
-       */
-      if (activeTasks >= limit) return;
+    Whenever
 
-      /**
-       * ⏳ Dependency Guard
-       *
-       * Skip this task if its dependencies are NOT completed yet.
-       */
-      if (!canRun(taskId)) continue;
+    a worker finishes,
 
-      /**
-       * 🧹 Move task from pending → running
-       */
-      pending.delete(taskId); // Remove from pending queue
-      activeTasks++;          // Increment active count
+    search for
 
-      /**
-       * ▶️ Execute the async task
-       */
-      graph[taskId]
-        .task()
-        .then(() => {
-          // ✅ Task resolved successfully
-          console.log(`✅ ${taskId} completed`);
-          completed.add(taskId); // Mark as completed
-        })
-        .catch((err) => {
-          // ❌ Task failed
-          console.error(`❌ ${taskId} failed`, err);
-        })
-        .finally(() => {
-          /**
-           * 🔁 Cleanup + Reschedule
-           *
-           * - Decrease active task count
-           * - Try to schedule next eligible tasks
-           */
-          activeTasks--;
-          executeNext(); // Re-run scheduler
-        });
+    newly eligible tasks.
+    */
+
+    function executeNext() {
+
+      /*
+      Base Case.
+
+      Nothing waiting.
+
+      Nothing running.
+
+      Done.
+      */
+
+      if (
+
+        pending.size === 0 &&
+
+        activeWorkers === 0
+
+      ) {
+
+        resolve();
+
+        return;
+
+      }
+
+      /*
+      WHY copy Set?
+
+      We remove tasks
+
+      while iterating.
+      */
+
+      for (const taskId of [...pending]) {
+
+        /*
+        Workers full.
+
+        Stop scheduling.
+        */
+
+        if (
+
+          activeWorkers >= limit
+
+        ) {
+
+          return;
+
+        }
+
+        /*
+        Dependencies
+
+        not finished yet.
+        */
+
+        if (!canRun(taskId)) {
+
+          continue;
+
+        }
+
+        pending.delete(taskId);
+
+        activeWorkers++;
+
+        graph[taskId]
+
+          .task()
+
+          .then(() => {
+
+            console.log(
+
+              `✅ ${taskId} completed`
+
+            );
+
+            completed.add(taskId);
+
+          })
+
+          .catch(error => {
+
+            console.error(
+
+              `❌ ${taskId} failed`,
+
+              error
+
+            );
+
+          })
+
+          .finally(() => {
+
+            /*
+            WHY finally?
+
+            Worker becomes free
+
+            regardless of
+
+            success
+
+            or
+
+            failure.
+            */
+
+            activeWorkers--;
+
+            executeNext();
+
+          });
+
+      }
+
     }
-  }
 
-  /**
-   * 🚦 Kick off execution
-   */
-  executeNext();
+    executeNext();
+
   });
+
 }
 
-/* --------------------------------------------------
-   🧪 Example Usage
--------------------------------------------------- */
+
+// --------------------------------------------------
+// EXAMPLE
+// --------------------------------------------------
 
 const asyncGraph = {
+
   A: {
+
     dependency: [],
-    task: () => delay(1000),
+
+    task: () => delay(1000)
+
   },
+
   B: {
+
     dependency: ["A"],
-    task: () => delay(800),
+
+    task: () => delay(800)
+
   },
+
   C: {
+
     dependency: ["A"],
-    task: () => delay(500),
+
+    task: () => delay(500)
+
   },
+
   D: {
-    dependency: ["B", "C"],
-    task: () => delay(700),
-  },
+
+    dependency: [
+
+      "B",
+
+      "C"
+
+    ],
+
+    task: () => delay(700)
+
+  }
+
 };
 
-try {
-  const order = resolveDependenciesWithCycleDetection(asyncGraph);
-  console.log("🔀 Execution Order:", order);
 
-  executeTasksInParallel(order, asyncGraph, 2).then(() => {
-    console.log("🎉 All tasks completed");
+try {
+
+  const order =
+
+    resolveDependenciesWithCycleDetection(
+
+      asyncGraph
+
+    );
+
+  console.log(
+
+    "Execution Order:",
+
+    order
+
+  );
+
+  executeTasksInParallel(
+
+    order,
+
+    asyncGraph,
+
+    2
+
+  ).then(() => {
+
+    console.log(
+
+      "🎉 All tasks completed"
+
+    );
+
   });
-} catch (e) {
-  console.error("🚨 ERROR:", e.message);
+
+} catch (err) {
+
+  console.error(err.message);
+
 }
 
-// OUTPUT
 
-// 🔀 Execution Order: [ 'D', 'C', 'B', 'A' ]
-// ✅ A completed
-// ✅ C completed
-// ✅ B completed
-// ✅ D completed
-// 🎉 All tasks completed
+/*
 
+Possible Output
+
+Execution Order
+
+[ 'A', 'C', 'B', 'D' ]
+
+OR
+
+[ 'A', 'B', 'C', 'D' ]
+
+(Both are valid)
+
+✅ A completed
+
+✅ C completed
+
+✅ B completed
+
+✅ D completed
+
+🎉 All tasks completed
+
+*/
 
 
 /* --------------------------------------------------
-   28. SMART PAGINATION COMPONENTS WITH ELIPSIS
-  -------------------------------------------------- 
+   28. SMART PAGINATION WITH ELLIPSIS
+--------------------------------------------------
+
+Problem:
+Return the page numbers to display in a pagination component.
+
+Rules:
+✔ Always show first page
+✔ Always show last page
+✔ Show current page
+✔ Show one page before current
+✔ Show one page after current
+✔ Insert "..." whenever pages are skipped
+
+Example
+
+current = 5
+total = 10
+
+Output
+
+[1, "...", 4, 5, 6, "...", 10]
+
+Time Complexity : O(k log k)
+k = number of candidate pages (constant here, at most 5)
+
+Space Complexity : O(k)
 */
 
 function getPaginationPages(current, total) {
+
+  /*
+    WHY validate inputs?
+
+    Avoid invalid page numbers such as
+
+    current = 0
+    current = 15 (when total = 10)
+    total <= 0
+
+    Returning an empty array is safer than
+    producing incorrect pagination.
+  */
+  if (total <= 0 || current < 1 || current > total) {
+    return [];
+  }
+
+  /*
+    WHY Set?
+
+    Different rules may generate duplicate pages.
+
+    Example
+
+    current = 1
+
+    We add
+
+    1
+    current
+    current - 1
+    current + 1
+
+    Without Set
+
+    [1,1,0,2,10]
+
+    With Set
+
+    {1,2,10}
+
+    Automatically removes duplicates.
+  */
   const pages = new Set();
 
-  // Always include first & last
+  /*
+    Always show first & last page.
+  */
   pages.add(1);
   pages.add(total);
 
-  // Include current and neighbors
-  pages.add(current);
+  /*
+    Show current page and its neighbours.
+
+    Example
+
+    current = 5
+
+    Add
+
+    4
+    5
+    6
+  */
   pages.add(current - 1);
+  pages.add(current);
   pages.add(current + 1);
 
-  // Remove invalid pages
+  /*
+    Convert Set → Array
+
+    Remove invalid page numbers
+
+    Example
+
+    current = 1
+
+    Set
+
+    {1,0,2,10}
+
+    Filter
+
+    {1,2,10}
+
+    WHY sort?
+
+    Set preserves insertion order,
+    NOT numeric order.
+
+    Sorting ensures pages always appear
+    from left to right.
+
+    Example
+
+    [10,1,5]
+
+    becomes
+
+    [1,5,10]
+  */
   const validPages = [...pages]
-    .filter(p => p >= 1 && p <= total)
+    .filter(page => page >= 1 && page <= total)
     .sort((a, b) => a - b);
 
   const result = [];
 
-  for (let i = 0; i < validPages.length; i++) {
-    const curr = validPages[i];
-    const prev = validPages[i - 1];
+  /*
+    Build final pagination.
 
-    // If gap > 1 → insert ellipsis
-    if (i > 0 && curr - prev > 1) {
+    Whenever two consecutive pages have
+    a gap greater than one,
+
+    insert an ellipsis.
+
+    Example
+
+    Pages
+
+    [1,5,6,10]
+
+    Between
+
+    1 and 5
+
+    Missing pages
+
+    2,3,4
+
+    so add "..."
+
+    Result
+
+    [1,"...",5,6,"...",10]
+  */
+  for (let i = 0; i < validPages.length; i++) {
+    const currentPage = validPages[i];
+    const previousPage = validPages[i - 1];
+
+    /*
+      WHY gap > 1 ?
+
+      Gap = 1
+
+      5 → 6
+
+      Nothing is hidden.
+
+      Gap > 1
+
+      5 → 8
+
+      Hidden pages exist (6,7)
+
+      Show ellipsis.
+    */
+    if (i > 0 && currentPage - previousPage > 1) {
       result.push("...");
     }
 
-    result.push(curr);
+    result.push(currentPage);
   }
 
   return result;
 }
 
-console.log(getPaginationPages(1, 10));
-// [1, 2, "...", 10]
+    /* --------------------------------------------------
+      TEST CASES
+    -------------------------------------------------- */
 
-console.log(getPaginationPages(5, 10));
-// [1, "...", 4, 5, 6, "...", 10]
+    console.log(getPaginationPages(1, 10));
+    // [1, 2, "...", 10]
 
-console.log(getPaginationPages(9, 10));
-// [1, "...", 8, 9, 10]
+    console.log(getPaginationPages(5, 10));
+    // [1, "...", 4, 5, 6, "...", 10]
+
+    console.log(getPaginationPages(9, 10));
+    // [1, "...", 8, 9, 10]
+
+    console.log(getPaginationPages(10, 10));
+    // [1, "...", 9, 10]
+
+    console.log(getPaginationPages(3, 5));
+    // [1, 2, 3, 4, 5]
+
+    console.log(getPaginationPages(0, 5));
+    // []
 
 
 /* --------------------------------------------------
    29. PRIORITY BASED DATA FETCHING
-      Rules
-       1. All network requests must be initiated in parallel (not sequentially)
-       2. Endpoint priority is determined by position in the array(index 0 = highest priority)
-       3. A response is considered valid only if the request resolves successfully 
-       4. As soon as the highest-priority successful response can be determined,
-          it should be returned without unecessary waiting.
-       5. If all request fail(network error or non-success HTTP status),
-          the function must reject with an appropriate error.  
-  -------------------------------------------------- 
-*/
+--------------------------------------------------
+
+Problem
+
+Multiple API endpoints return the same data.
+
+Rules
+
+✔ Start ALL requests immediately (parallel)
+
+✔ Priority is based on array index
+   index 0 = highest priority
+
+✔ A response is valid only if:
+   - fetch succeeds
+   - HTTP status is successful (response.ok)
+
+✔ Return the highest-priority successful response
+   as soon as it can be determined.
+
+✔ Do NOT wait for lower-priority requests
+   once the answer is known.
+
+✔ Reject only if ALL requests fail.
+
+--------------------------------------------------
+
+Time Complexity : O(n²) worst case
+
+Why?
+
+Each completed request scans the results array
+from the beginning.
+
+For interview purposes this is perfectly acceptable.
+
+Space Complexity : O(n)
+
+Stores one result per request.
+-------------------------------------------------- */
 
 function getPreferredResponse(endpoints) {
+
+  /*
+    WHY validate input?
+
+    Avoid invalid usage.
+
+    Example
+
+    getPreferredResponse()
+
+    getPreferredResponse([])
+
+    should fail immediately.
+  */
   if (!Array.isArray(endpoints) || endpoints.length === 0) {
     return Promise.reject(
-      new Error("Endpoints should be a valid non-empty array")
+      new Error("Endpoints should be a non-empty array")
     );
   }
 
   return new Promise((resolve, reject) => {
-    const results = new Array(endpoints.length);
+
+    /*
+      Stores completion state for every request.
+
+      undefined
+
+      →
+
+      Request still running
+
+      { success:true }
+
+      →
+
+      Request succeeded
+
+      { success:false }
+
+      →
+
+      Request failed
+    */
+    const requestResults = new Array(endpoints.length);
+
+    /*
+      Number of requests that have finished
+      (success OR failure).
+    */
     let settledCount = 0;
+
+    /*
+      WHY resolved flag?
+
+      Multiple requests may finish
+      almost simultaneously.
+
+      We should resolve/reject ONLY once.
+    */
     let resolved = false;
 
+    /*
+      IMPORTANT
+
+      Start ALL requests immediately.
+
+      WHY?
+
+      Requirement says requests must run
+      in parallel.
+
+      Never wait for one request before
+      starting another.
+    */
     endpoints.forEach((endpoint, index) => {
+
       fetch(endpoint)
+
+        /*
+          WHY check response.ok ?
+
+          fetch() only rejects for:
+
+          ✔ network failure
+          ✔ DNS failure
+          ✔ connection timeout
+
+          HTTP errors like
+
+          404
+          500
+          403
+
+          STILL resolve normally.
+
+          Therefore we must convert
+          HTTP failures into rejected promises.
+        */
         .then((response) => {
-          if (!response.ok) throw new Error("API call failed");
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
           return response.json();
         })
+
         .then((data) => {
-          results[index] = { success: true, data };
+          requestResults[index] = {
+            success: true,
+            data,
+          };
         })
-        .catch((err) => {
-          results[index] = { success: false, err };
+
+        .catch((error) => {
+          requestResults[index] = {
+            success: false,
+            error,
+          };
         })
+
         .finally(() => {
           settledCount++;
           checkResolution();
         });
     });
 
+    /*
+      Determines whether we already know
+      the highest-priority successful response.
+    */
     function checkResolution() {
+
+      /*
+        Promise already settled.
+
+        Ignore later completions.
+      */
       if (resolved) return;
 
-      for (let i = 0; i < results.length; i++) {
-        const current = results[i];
+      /*
+        Scan from HIGHEST priority
+        to LOWEST priority.
 
-        // Higher-priority request still pending
-        if (current === undefined) return;
+        WHY every time?
 
+        Lower-priority requests may finish earlier,
+        but they cannot be returned until every
+        higher-priority request has completed.
+      */
+      for (let i = 0; i < requestResults.length; i++) {
+
+        const current = requestResults[i];
+
+        /*
+          WHY undefined means WAIT?
+
+          Example
+
+          Priority
+
+          0 1 2
+
+          Results
+
+          undefined
+          success
+          success
+
+          We still don't know whether
+          request 0 will succeed.
+
+          Since 0 has higher priority,
+
+          we must wait.
+        */
+        if (current === undefined) {
+          return;
+        }
+
+        /*
+          First successful request encountered
+          while scanning priorities.
+
+          This is guaranteed to be the
+          highest-priority successful response.
+        */
         if (current.success) {
           resolved = true;
           resolve(current.data);
@@ -3229,52 +7047,192 @@ function getPreferredResponse(endpoints) {
         }
       }
 
-      if (!resolved && settledCount === endpoints.length) {
+      /*
+        Every request finished.
+
+        None succeeded.
+
+        Reject.
+      */
+      if (settledCount === endpoints.length) {
         resolved = true;
-        reject(new Error("All APIs failed"));
+        reject(new Error("All API requests failed"));
       }
     }
   });
 }
 
+    /* --------------------------------------------------
+      WHY NOT Promise.race() ?
+
+    Promise.race()
+
+    Returns whichever finishes first.
+
+    That ignores priority.
+
+    --------------------------------------------------
+
+    WHY NOT Promise.any() ?
+
+    Promise.any()
+
+    Returns the first successful request.
+
+    Again, it ignores priority.
+
+    --------------------------------------------------
+
+    This solution waits ONLY when necessary
+    to determine the highest-priority success.
+    -------------------------------------------------- */
+
+
+   /* --------------------------------------------------
+       30. PIPE
+    --------------------------------------------------
+
+      Problem
+
+      Create a pipe() function that accepts multiple
+      functions and returns a new function.
+
+      The returned function passes its input through
+      every function from LEFT → RIGHT.
+
+      Example
+
+      pipe(f1, f2, f3)(x)
+
+      ↓
+
+      f3(f2(f1(x)))
+
+      Time Complexity : O(n)
+
+      n = number of functions
+
+      Space Complexity : O(1)
+
+      (excluding function call stack)
+      -------------------------------------------------- */
+
+  // pipe executes functions LEFT → RIGHT
+  function pipe(...functions) {
+
+    /*
+      WHY return another function?
+
+      pipe() builds the pipeline first.
+
+      Later we provide the actual value.
+
+      Example
+
+      const transform = pipe(f1, f2, f3);
+
+      transform(10);
+    */
+    return function (value) {
+
+      /*
+        WHY reduce()?
+
+        reduce() carries forward
+        the accumulated value.
+
+        Previous output
+
+        ↓
+
+        Next function input
+
+        Exactly what a pipeline needs.
+      */
+      return functions.reduce(
+
+        (currentValue, currentFunction) => {
+
+          /*
+            Execute current function.
+
+            Output becomes input
+            for the next function.
+          */
+          return currentFunction(currentValue);
+
+        },
+
+        /*
+          Initial value passed to
+          the FIRST function.
+        */
+        value
+      );
+    };
+  }
+
 /* --------------------------------------------------
-   30. PIPING 2
-      Create a function pipe that accepts multiple functions as an argument and a value and run this value through each function and return the final output.
-  -------------------------------------------------- 
-*/
+   EXAMPLE
+-------------------------------------------------- */
 
-// pipe runs functions from left to right
-function pipe(...functions) {
-
-  // Return a new function that accepts the initial value
-  return function (value) {
-
-    // Pass the output of each function
-    // as the input to the next function
-    return functions.reduce((currentValue, currentFunction) => {
-
-      // Execute current function
-      return currentFunction(currentValue);
-
-    }, value); // Initial value for reduce
+  const person = {
+    salary: 10000
   };
-}
 
-// Input:
-// const val = { salary: 10000 };
+  const getSalary = (person) => person.salary;
 
-// const getSalary = (person) => person.salary
-// const addBonus = (netSalary) => netSalary + 1000;
-// const deductTax = (grossSalary) => grossSalary - (grossSalary * .3);
+  const addBonus = (salary) => salary + 1000;
 
-// const result = pipe(
-//   getSalary,
-//   addBonus,
-//   deductTax 
-// )(val);
+  const deductTax = (salary) => salary - salary * 0.30;
 
-// Output:
-// 7700
+  const calculateNetSalary = pipe(
+    getSalary,
+    addBonus,
+    deductTax
+  );
+
+  console.log(calculateNetSalary(person));
+
+  // 7700
+
+/* --------------------------------------------------
+   Edge Case
+
+   pipe()(10)
+
+   No functions supplied.
+
+   reduce() simply returns the initial value.
+
+   Output
+
+   10
+
+-------------------------------------------------- */
+
+/* --------------------------------------------------
+   PIPE vs COMPOSE
+
+   pipe()
+
+   LEFT → RIGHT
+
+   pipe(f1, f2, f3)(x)
+
+   f3(f2(f1(x)))
+
+
+
+   compose()
+
+   RIGHT → LEFT
+
+   compose(f1, f2, f3)(x)
+
+   f1(f2(f3(x)))
+
+-------------------------------------------------- */
 
 
 /* --------------------------------------------------
