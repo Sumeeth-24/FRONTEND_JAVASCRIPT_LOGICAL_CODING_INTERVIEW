@@ -7490,49 +7490,127 @@ myQueue.error(function(err, task) {
 
 
 /* --------------------------------------------------
-   34. PUBLISHER SUBSCRIBER - PART 1
-     Create a simple Observable class that implements the observer pattern. The class should:
+   34. PUBLISHER - SUBSCRIBER (OBSERVER PATTERN)
 
-      Allow subscribing to data changes via a subscribe method
-      Notify all subscribers when data changes via a notify method
-      Allow unsubscribing from updates
-      Maintain a list of subscriber callbacks
-  -------------------------------------------------- 
-*/
+   Goal:
+   Implement a simple Observable class that can:
 
-// Observable implements the Publisher-Subscriber (Observer) pattern
+   ✔ Subscribe to updates
+   ✔ Notify all subscribers
+   ✔ Unsubscribe later
+   ✔ Maintain a list of subscriber callbacks
+
+   Real-world examples:
+   • React state updates
+   • Event Emitters
+   • Redux store subscriptions
+   • RxJS Observables
+-------------------------------------------------- */
+
 class Observable {
   constructor() {
-    // Stores all subscriber callbacks
-    this.subscribers = [];
+    /*
+      Store all subscriber callbacks.
+
+      Using a Set instead of an Array because:
+
+      ✔ Prevents duplicate callbacks
+      ✔ delete() is O(1)
+      ✔ Cleaner than filtering arrays
+
+      Example:
+      [
+        callback1,
+        callback2
+      ]
+    */
+    this.subscribers = new Set();
   }
 
-  // Register a new subscriber
-  subscribe(callback) {
-    // Save the callback
-    this.subscribers.push(callback);
+  // --------------------------------------------------
+  // SUBSCRIBE
+  // --------------------------------------------------
 
-    // Return a subscription object
-    // so caller can unsubscribe later
+  /*
+    Registers a new subscriber.
+
+    callback -> Function to execute whenever notify() is called.
+
+    Returns an object containing unsubscribe()
+    so the caller can stop receiving updates later.
+
+    Time Complexity:
+    Add -> O(1)
+  */
+  subscribe(callback) {
+    // Save subscriber
+    this.subscribers.add(callback);
+
+    /*
+      Return an object instead of just a function.
+
+      Why?
+
+      This matches many real-world libraries
+      like RxJS.
+
+      Example:
+
+      const subscription = observable.subscribe(...);
+
+      subscription.unsubscribe();
+    */
     return {
       unsubscribe: () => {
-        // Remove only this callback
-        this.subscribers = this.subscribers.filter(
-          subscriber => subscriber !== callback
-        );
-      }
+        /*
+          Arrow function remembers the callback
+          through JavaScript closure.
+
+          It removes ONLY this subscriber.
+
+          delete() is O(1)
+        */
+        this.subscribers.delete(callback);
+      },
     };
   }
 
-  // Notify every subscriber with new data
+  // --------------------------------------------------
+  // NOTIFY
+  // --------------------------------------------------
+
+  /*
+    Sends data to every subscriber.
+
+    Every registered callback receives
+    exactly the same data.
+
+    Time Complexity:
+    O(n)
+    where n = number of subscribers
+  */
   notify(data) {
-    this.subscribers.forEach(callback => callback(data));
+    /*
+      If one subscriber throws an error,
+      we don't want the remaining subscribers
+      to miss the notification.
+
+      Therefore each callback executes
+      inside its own try...catch.
+    */
+    this.subscribers.forEach((subscriberCallback) => {
+      try {
+        subscriberCallback(data);
+      } catch (error) {
+        console.error("Subscriber Error:", error);
+      }
+    });
   }
 }
 
-// ------------------------------
-// Example
-// ------------------------------
+/* --------------------------------------------------
+   Example
+-------------------------------------------------- */
 
 const observable = new Observable();
 
@@ -7546,11 +7624,21 @@ const subscription2 = observable.subscribe((data) => {
   console.log("Subscriber 2:", data);
 });
 
-// Notify all subscribers
+/*
+Current subscribers:
+
+Set {
+   callback1,
+   callback2
+}
+*/
+
+// Notify everyone
 observable.notify("Hello!");
 
 /*
 Output:
+
 Subscriber 1: Hello!
 Subscriber 2: Hello!
 */
@@ -7558,559 +7646,1400 @@ Subscriber 2: Hello!
 // Remove first subscriber
 subscription1.unsubscribe();
 
+/*
+Remaining subscribers:
+
+Set {
+   callback2
+}
+*/
+
 // Notify again
 observable.notify("Hello again!");
 
 /*
 Output:
+
 Subscriber 2: Hello again!
 */
 
 // Remove second subscriber
 subscription2.unsubscribe();
 
-// No subscribers left
+/*
+Subscribers:
+
+Set {}
+*/
+
+// No subscribers remain
 observable.notify("Nobody receives this");
 
 /*
 Output:
+
 (nothing)
 */
 
 
+
 /* --------------------------------------------------
-   35. PUBLISHER SUBSCRIBER - PART 2
+   35. PUBLISHER - SUBSCRIBER (PART 2)
 
-     Implement the pub-sub pattern in JavaScript that has following methods: subscribe, subscribeOnce, and subscribeOnceAsync
+   Goal:
+   Build a Pub/Sub system supporting:
 
-    subscribe(name, callback): Will take the name of the event and assign a callback to it. This callback will be invoked when the event is published. It returns a remove() method to unsubscribe the event.
-    subscribeOnce(name, callback): Will take the name of the event and assign a callback to it. This event will be published only once.
-    subscribeOnceAsync(name): Will take the name of the event and returns a promise that is settled or fullfilled when the event is published.
-    publish(name, data): Publish a single event and pass the data to the callback of each events. If the event is subscribed only once, it should not invoke twice.
-    publishAll(name): Publishes all events and passes the data to the callback of each events. If the event is subscribed only once, it should not invoke twice.
-  -------------------------------------------------- 
-*/
+   ✔ subscribe()
+   ✔ subscribeOnce()
+   ✔ subscribeOnceAsync()
+   ✔ publish()
+   ✔ publishAll()
+
+   Real-world examples:
+
+   • Node.js EventEmitter
+   • Browser Events
+   • Redux listeners
+   • Notification systems
+   • Chat applications
+-------------------------------------------------- */
 
 class PubSub {
   constructor() {
-    // Stores listeners for every event
-    // {
-    //   eventName: [{ callback, once }]
-    // }
-    this.events = {};
+    /*
+      Store all events.
+
+      Key   -> Event name
+      Value -> Array of listeners
+
+      Example:
+
+      Map {
+          "login" => [
+              { callback, once: false },
+              { callback, once: true }
+          ],
+
+          "logout" => [
+              { callback, once: false }
+          ]
+      }
+
+      Using Map instead of an object:
+
+      ✔ Cleaner ES6 API
+      ✔ Avoids prototype collisions
+      ✔ Better for dynamic keys
+    */
+    this.events = new Map();
   }
 
   // --------------------------------------------------
-  // Subscribe to an event
+  // Internal helper
   // --------------------------------------------------
-  subscribe(name, callback) {
 
-    if (!this.events[name]) {
-      this.events[name] = [];
+  /*
+    Returns listeners for an event.
+
+    If the event doesn't exist,
+    create an empty listener array first.
+
+    Time Complexity:
+    O(1)
+  */
+  getListeners(name) {
+    if (!this.events.has(name)) {
+      this.events.set(name, []);
     }
 
-    this.events[name].push({
+    return this.events.get(name);
+  }
+
+  // --------------------------------------------------
+  // SUBSCRIBE
+  // --------------------------------------------------
+
+  /*
+    Register a listener that executes
+    every time the event is published.
+
+    Returns an object with remove()
+    so the caller can unsubscribe later.
+
+    Time Complexity:
+    Add -> O(1)
+  */
+  subscribe(name, callback) {
+    const listeners = this.getListeners(name);
+
+    listeners.push({
       callback,
-      once: false
+      once: false,
     });
 
-    // Return remove() API
     return {
       remove: () => {
-        this.events[name] = this.events[name].filter(
-          listener => listener.callback !== callback
+        /*
+          Remove only this callback.
+
+          filter() creates a new array
+          excluding the removed listener.
+
+          Time Complexity:
+          O(n)
+        */
+        this.events.set(
+          name,
+          this.events
+            .get(name)
+            .filter((listener) => listener.callback !== callback)
         );
-      }
+      },
     };
   }
 
   // --------------------------------------------------
-  // Subscribe only once
+  // SUBSCRIBE ONCE
   // --------------------------------------------------
-  subscribeOnce(name, callback) {
 
-    if (!this.events[name]) {
-      this.events[name] = [];
+  /*
+    Listener executes only once.
+
+    After the first publish(),
+    it is automatically removed.
+
+    Time Complexity:
+    O(1)
+  */
+  subscribeOnce(name, callback) {
+    this.getListeners(name).push({
+      callback,
+      once: true,
+    });
+  }
+
+  // --------------------------------------------------
+  // SUBSCRIBE ONCE ASYNC
+  // --------------------------------------------------
+
+  /*
+    Returns a Promise that resolves
+    when the event is published.
+
+    resolve itself becomes the callback.
+
+    publish()
+
+          │
+
+          ▼
+
+    listener.callback(data)
+
+          │
+
+          ▼
+
+    resolve(data)
+
+          │
+
+          ▼
+
+    Promise fulfilled
+  */
+  subscribeOnceAsync(name) {
+    return new Promise((resolve) => {
+      this.subscribeOnce(name, resolve);
+    });
+  }
+
+  // --------------------------------------------------
+  // PUBLISH
+  // --------------------------------------------------
+
+  /*
+    Notify every listener of one event.
+
+    Once listeners are removed
+    immediately after execution.
+
+    Time Complexity:
+    O(n)
+  */
+  publish(name, data) {
+    if (!this.events.has(name)) return;
+
+    const listeners = this.events.get(name);
+
+    const remainingListeners = [];
+
+    for (const listener of listeners) {
+      try {
+        listener.callback(data);
+      } catch (error) {
+        console.error("Listener Error:", error);
+      }
+
+      /*
+        Keep only permanent listeners.
+
+        Once listeners disappear
+        after their first execution.
+      */
+      if (!listener.once) {
+        remainingListeners.push(listener);
+      }
     }
 
-    this.events[name].push({
-      callback,
-      once: true
-    });
+    this.events.set(name, remainingListeners);
   }
 
   // --------------------------------------------------
-  // Promise resolves on first publish
+  // PUBLISH ALL
   // --------------------------------------------------
-  subscribeOnceAsync(name) {
 
-    return new Promise(resolve => {
+  /*
+    Publish every registered event.
 
-      this.subscribeOnce(name, resolve);
+    Example:
 
-    });
-  }
+    login
+    logout
+    payment
 
-  // --------------------------------------------------
-  // Publish a single event
-  // --------------------------------------------------
-  publish(name, data) {
+    publishAll()
 
-    if (!this.events[name]) return;
+    publishes all three events.
 
-    this.events[name] = this.events[name].filter(listener => {
-
-      listener.callback(data);
-
-      // Keep only non-once listeners
-      return !listener.once;
-    });
-  }
-
-  // --------------------------------------------------
-  // Publish all registered events
-  // --------------------------------------------------
+    Time Complexity:
+    O(total listeners)
+  */
   publishAll(data) {
-
-    for (const eventName in this.events) {
-
+    for (const eventName of this.events.keys()) {
       this.publish(eventName, data);
-
     }
   }
 }
 
+/* --------------------------------------------------
+   Example
+-------------------------------------------------- */
+
 const events = new PubSub();
 
-const newUserNewsSubscription = events.subscribe("new-user", function (payload) {
+// Subscriber 1
+const subscription1 = events.subscribe("new-user", (payload) => {
   console.log(`Sending Q1 News to: ${payload}`);
 });
 
-events.publish("new-user", "Jhon");
+// Notify all "new-user" subscribers
+events.publish("new-user", "John");
 
-//output: "Sending Q1 News to: Jhon"
+/*
+Output:
+Sending Q1 News to: John
+*/
 
-const newUserNewsSubscription2 = events.subscribe("new-user", function (payload) {
+// Subscriber 2
+const subscription2 = events.subscribe("new-user", (payload) => {
   console.log(`Sending Q2 News to: ${payload}`);
 });
 
 events.publish("new-user", "Doe");
 
-//output: "Sending Q1 News to: Doe"
-//output: "Sending Q2 News to: Doe"
+/*
+Output:
+Sending Q1 News to: Doe
+Sending Q2 News to: Doe
+*/
 
-newUserNewsSubscription.remove(); // Q1 news is removed
+// Remove first subscriber
+subscription1.remove();
 
 events.publish("new-user", "Foo");
-//output: "Sending Q2 News to: Foo"
 
+/*
+Output:
+Sending Q2 News to: Foo
+*/
+
+// Publish every registered event
 events.publishAll("FooBar");
-//output: "Sending Q2 News to: FooBar"
 
-events.subscribeOnce("new-user", function (payload) {
-  console.log(`I am invoked once ${payload}`);
+/*
+Output:
+Sending Q2 News to: FooBar
+*/
+
+// Executes only once
+events.subscribeOnce("new-user", (payload) => {
+  console.log(`Invoked once: ${payload}`);
 });
 
 events.publish("new-user", "Foo Once");
-//output: "Sending Q2 News to: Foo Once" - normal event
-//output: "I am invoked once Foo Once" - once event
+
+/*
+Output:
+Sending Q2 News to: Foo Once
+Invoked once: Foo Once
+*/
 
 events.publish("new-user", "Foo Twice");
-//output: "Sending Q2 News to: Foo Twice" - normal event
-// once event should not invoke for second time
 
+/*
+Output:
+Sending Q2 News to: Foo Twice
 
-events.subscribeOnceAsync("new-user").then(function (payload) {
-  console.log(`I am invoked once ${payload}`);
+(once listener no longer exists)
+*/
+
+// Promise-based subscription
+events.subscribeOnceAsync("new-user").then((payload) => {
+  console.log(`Promise resolved with: ${payload}`);
 });
 
 events.publish("new-user", "Foo Once Async");
-//output: "Sending Q2 News to: Foo Once Async"
-//output: "I am invoked once Foo Once Async"
+
+/*
+Output:
+Sending Q2 News to: Foo Once Async
+Promise resolved with: Foo Once Async
+*/
 
 
 
 /* --------------------------------------------------
-   35. CREATE COMPOSE ASYNC FUNCTION WITH CHAINING SUPPORT
-  -------------------------------------------------- 
-*/
+   35. COMPOSE ASYNC
+
+   Goal:
+   Compose multiple asynchronous functions
+   into a single function.
+
+   Execution order:
+
+   composeAsync(c, b, a)
+
+           │
+
+           ▼
+
+   a()
+
+           ▼
+
+   b()
+
+           ▼
+
+   c()
+
+   (Right → Left)
+
+   Similar to mathematical composition:
+   c(b(a(x)))
+-------------------------------------------------- */
 
 function composeAsync(...functions) {
 
-  // Return a function that accepts the arguments
-  // for the right-most function
+  /*
+    If no functions are supplied,
+    return an identity function.
+
+    composeAsync()(5)
+
+    → Promise.resolve(5)
+  */
+  if (functions.length === 0) {
+    return (...args) => Promise.resolve(args[0]);
+  }
+
+  /*
+    Return a new function.
+
+    Its arguments become the arguments
+    of the right-most function.
+  */
   return function (...args) {
 
-    // Execute the last function first
+    /*
+      Execute the last function first.
+
+      Promise.resolve() converts both
+
+      Value
+      OR
+      Promise
+
+      into a Promise so that we can
+      safely chain .then().
+    */
     let promise = Promise.resolve(
       functions[functions.length - 1](...args)
     );
 
-    // Chain remaining functions from right → left
+    /*
+      Chain remaining functions
+      from right to left.
+
+      compose(c,b,a)
+
+      becomes
+
+      c(
+          b(
+              a(...)
+           )
+       )
+
+      Time Complexity:
+      O(n)
+    */
     for (let i = functions.length - 2; i >= 0; i--) {
+      promise = promise.then(functions[i]);
 
-      promise = promise.then(result => {
-        return functions[i](result);
-      });
+      /*
+        Equivalent to:
 
+        promise = promise.then(result => {
+            return functions[i](result);
+        });
+      */
     }
 
+    /*
+      If any function rejects,
+      the returned Promise also rejects.
+
+      Remaining functions
+      are NOT executed.
+    */
     return promise;
   };
 }
 
+/* --------------------------------------------------
+   Example Functions
+-------------------------------------------------- */
+
+// Multiply
 function a(x, y) {
-  return new Promise(resolve => setTimeout(() => resolve(x * y), 100));
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(x * y), 100);
+  });
 }
 
-function b(z) {
-  return new Promise((resolve, reject) => setTimeout(() => resolve(z + 5), 100));
+// Add
+function b(value) {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(value + 5), 100);
+  });
 }
 
-function c(r) {
-  return new Promise(resolve => setTimeout(() => resolve(r / 10), 100));
+// Divide
+function c(value) {
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(value / 10), 100);
+  });
 }
 
-// create this function
-composeAsync(c, b, a)(5, 3).then(result => { console.log(result); }).catch(console.error);
+  /*
+  Execution:
 
+  composeAsync(c, b, a)(5,3)
+
+  ↓
+
+  a(5,3)
+
+  15
+
+  ↓
+
+  b(15)
+
+  20
+
+  ↓
+
+  c(20)
+
+  2
+  */
+
+composeAsync(c, b, a)(5, 3)
+  .then((result) => console.log(result))
+  .catch(console.error);
+
+  /*
+  Output:
+
+  2
+  */
 
 
 /* --------------------------------------------------
-   36. IMPLEMENT MAP DATA STRUCTURE WITH EVENT LISTENER
+   36. MAP DATA STRUCTURE WITH EVENT LISTENERS
 
-        Storage for key-value pairs. Override value for same key.
-        Event listeners that trigger when values change.
-        Support for both change:key and key event formats on listener.
-  -------------------------------------------------- 
-*/
+   Goal:
+   Build a custom key-value store that supports:
+
+   ✔ set(key, value)
+   ✔ get(key)
+   ✔ has(key)
+   ✔ Event listeners
+   ✔ Automatic notifications when values change
+
+   Similar to:
+
+   • Redux Store
+   • Zustand
+   • MobX
+   • Browser EventTarget
+-------------------------------------------------- */
 
 class StoreData {
   constructor() {
-    // Stores key-value pairs
+    /*
+      Stores all key-value pairs.
+
+      Example:
+
+      Map {
+          "name" => "John",
+          "age" => 25
+      }
+
+      Time Complexity:
+      O(1)
+    */
     this.store = new Map();
 
-    // Stores event listeners
-    // {
-    //   "change:name": [fn1, fn2],
-    //   "age": [fn3]
-    // }
+    /*
+      Stores listeners grouped by event name.
+
+      Example:
+
+      Map {
+          "change:name" => [
+              callback1,
+              callback2
+          ],
+
+          "age" => [
+              callback3
+          ]
+      }
+    */
     this.listeners = new Map();
   }
 
-  // -----------------------------
-  // Add / Update a value
-  // -----------------------------
-  add(key, value) {
+  // --------------------------------------------------
+  // Internal helper
+  // --------------------------------------------------
+
+  /*
+    Returns listeners for an event.
+
+    Creates an empty array if
+    the event doesn't exist.
+
+    Time Complexity:
+    O(1)
+  */
+  getListeners(eventName) {
+    if (!this.listeners.has(eventName)) {
+      this.listeners.set(eventName, []);
+    }
+
+    return this.listeners.get(eventName);
+  }
+
+  // --------------------------------------------------
+  // SET
+  // --------------------------------------------------
+
+  /*
+    Add or update a value.
+
+    If the value changed,
+    notify listeners.
+
+    Time Complexity:
+    O(1)
+  */
+  set(key, value) {
     const oldValue = this.store.get(key);
 
-    // Save latest value
     this.store.set(key, value);
 
-    // Trigger listeners only if value actually changed
+    /*
+      Notify only if the value
+      actually changed.
+    */
     if (oldValue !== value) {
+      /*
+        Support two event styles.
+
+        change:name
+
+        AND
+
+        name
+      */
       this.emit(`change:${key}`, oldValue, value, key);
       this.emit(key, oldValue, value, key);
     }
   }
 
-  // -----------------------------
-  // Check whether key exists
-  // -----------------------------
+  // --------------------------------------------------
+  // GET
+  // --------------------------------------------------
+
+  /*
+    Returns value for a key.
+
+    Time Complexity:
+    O(1)
+  */
+  get(key) {
+    return this.store.get(key);
+  }
+
+  // --------------------------------------------------
+  // HAS
+  // --------------------------------------------------
+
+  /*
+    Check if key exists.
+
+    Time Complexity:
+    O(1)
+  */
   has(key) {
     return this.store.has(key);
   }
 
-  // -----------------------------
-  // Register an event listener
-  // -----------------------------
-  on(eventName, callback) {
-    if (!this.listeners.has(eventName)) {
-      this.listeners.set(eventName, []);
-    }
+  // --------------------------------------------------
+  // ON
+  // --------------------------------------------------
 
-    this.listeners.get(eventName).push(callback);
+  /*
+    Register a listener.
+
+    Returns an unsubscribe function.
+
+    Time Complexity:
+    O(1)
+  */
+  on(eventName, callback) {
+    const listeners = this.getListeners(eventName);
+
+    listeners.push(callback);
+
+    return () => {
+      this.listeners.set(
+        eventName,
+        this.listeners
+          .get(eventName)
+          .filter((listener) => listener !== callback)
+      );
+    };
   }
 
-  // -----------------------------
-  // Notify all listeners
-  // -----------------------------
+  // --------------------------------------------------
+  // EMIT
+  // --------------------------------------------------
+
+  /*
+    Notify every listener
+    registered for an event.
+
+    Time Complexity:
+    O(n)
+  */
   emit(eventName, oldValue, newValue, key) {
     if (!this.listeners.has(eventName)) return;
 
     for (const callback of this.listeners.get(eventName)) {
-      callback(oldValue, newValue, key);
+      try {
+        callback(oldValue, newValue, key);
+      } catch (error) {
+        console.error("Listener Error:", error);
+      }
     }
   }
 }
 
+/* --------------------------------------------------
+   Example
+-------------------------------------------------- */
 
 const store = new StoreData();
 
-store.add("name", "joe");
-store.add("age", 30);
+// Add values
+store.set("name", "Joe");
+store.set("age", 30);
 
-console.log(store.has("age"));     // true
-console.log(store.has("animal"));  // false
+// Check existence
+console.log(store.has("age"));      // true
+console.log(store.has("animal"));   // false
 
-store.add("name", "emma");
+// Update value before listeners
+store.set("name", "Emma");
 
-store.on("change:name", (oldVal, newVal, key) => {
-  console.log(`old ${key}: ${oldVal}, new ${key}: ${newVal}`); // "old name: emma, new name: john"
+// Listen for name changes
+const unsubscribeName = store.on(
+  "change:name",
+  (oldValue, newValue, key) => {
+    console.log(
+      `Old ${key}: ${oldValue}, New ${key}: ${newValue}`
+    );
+  }
+);
+
+// Triggers listener
+store.set("name", "John");
+
+/*
+Output:
+
+Old name: Emma
+New name: John
+*/
+
+// Listen using the plain key
+store.on("age", (oldValue, newValue, key) => {
+  console.log(
+    `Old ${key}: ${oldValue}, New ${key}: ${newValue}`
+  );
 });
 
-store.add("name", "john");
+store.set("age", 50);
 
-store.on("age", (oldVal, newVal, key) => {
-  console.log(`old ${key}: ${oldVal}, new ${key}: ${newVal}`); // "old age: 30, new age: 50"
-});
+/*
+Output:
 
-store.add("age", 50);
+Old age: 30
+New age: 50
+*/
 
-store.on("change:age", (oldVal, newVal) => {
-  if (oldVal > newVal) {
-    console.log("older now");
+// Another listener
+store.on("change:age", (oldValue, newValue) => {
+  if (oldValue > newValue) {
+    console.log("Age decreased");
   }
 });
 
-store.add("age", 28); // "old age: 50, new age: 28"
-store.add("age", 45); // "old age: 28, new age: 45"
-
-
-
-/* --------------------------------------------------
-   37. CURRYING (1 TO 5)
-
-    Currying is the process of transforming a function that
-    takes multiple arguments into a sequence of functions,
-    each taking one (or more) arguments.
-
-    Normal
-
-    sum(1,2,3)
-
-    Curried
-
-    sum(1)(2)(3)
-
-    Benefits
-
-    • Partial application
-    • Function reuse
-    • Better composition
-    • Delayed execution
-  -------------------------------------------------- 
-*/
-
-// ---------------------------------------------------------
-// CURRYING - PART 1 (Closure based accumulator & NOT True Currying)
-// ---------------------------------------------------------
+store.set("age", 28);
 
 /*
-----------------------------------------------------------
-PART 1
+Output:
 
-This is NOT true currying.
+Old age: 50
+New age: 28
 
-It is a closure that keeps remembering the previous value.
-
-sum(5) -> 5
-sum(3) -> 8
-sum(4) -> 12
-
-The returned function has access to "total"
-even after curry() has finished executing.
-----------------------------------------------------------
+Age decreased
 */
 
-function curry() {
+store.set("age", 45);
 
-  // Private variable.
-  // Only the returned function can access or modify it.
+/*
+Output:
+
+Old age: 28
+New age: 45
+*/
+
+// Stop listening
+unsubscribeName();
+
+store.set("name", "David");
+
+/*
+No output
+*/
+
+
+// 37. CURRYING 1 TO 5
+
+/* ==========================================================
+        PART 1 - CLOSURE ACCUMULATOR
+=============================================================
+
+IMPORTANT
+
+Although this question is commonly called
+"Currying 1 to 5",
+
+this implementation is NOT actually currying.
+
+It demonstrates JavaScript Closures.
+
+-------------------------------------------------------------
+
+Goal
+
+Keep remembering previous values.
+
+Example
+
+sum(5)
+
+↓
+
+5
+
+sum(3)
+
+↓
+
+8
+
+sum(4)
+
+↓
+
+12
+
+Unlike true currying,
+
+sum(5)(3)(4)
+
+this implementation works as
+
+sum(5)
+sum(3)
+sum(4)
+
+because the returned function
+remembers previous state.
+
+=========================================================== */
+
+function createAccumulator() {
+
+  /*
+      Local variable.
+
+      Normally local variables disappear after
+      a function finishes execution.
+
+      HOWEVER...
+
+      Because the returned function references
+      "total",
+
+      JavaScript keeps this variable alive.
+
+      This is called a Closure.
+  */
+
   let total = 0;
 
-  // Returning a function creates a closure.
-  // The closure remembers "total".
-  return function (num) {
+  /*
+      Returning a function creates
+      a Closure.
 
-    // Add current value
-    total += num;
+      That Closure remembers "total"
+      forever (until nothing references
+      this function anymore).
+  */
 
-    // Return latest accumulated value
+  return function accumulate(number) {
+
+    /*
+        Update running total.
+    */
+
+    total += number;
+
+    /*
+        Return latest accumulated value.
+    */
+
     return total;
   };
 }
 
-const sum = curry();
-
-console.log(sum(5)); // 5
-console.log(sum(3)); // 8
-console.log(sum(4)); // 12
-console.log(sum(0)); // 12
-
-
-// ---------------------------------------------------------
-// CURRYING - PART 2 (Infinite Currying using valueOf)
-// ---------------------------------------------------------
-
 /*
-----------------------------------------------------------
-PART 2
+-------------------------------------------------------------
 
-Infinite Currying
+Execution
 
-curry(1)(2)(3)
+createAccumulator()
 
-Each call returns the SAME function,
-allowing unlimited chaining.
+↓
 
-The chain ends only when JavaScript converts
-the function into a primitive.
+returns accumulate()
 
-Number(...)
-Unary +
-Comparison
-Arithmetic
+↓
 
-During conversion JavaScript first calls valueOf().
-----------------------------------------------------------
+const sum = accumulate()
+
+-------------------------------------------------------------
 */
 
-function curry(initial = 0) {
+const sum = createAccumulator();
 
-  // Closure variable storing running total
-  let total = initial;
+console.log(sum(5));
+console.log(sum(3));
+console.log(sum(4));
+console.log(sum(0));
 
-  function curried(num) {
+/*
 
-    // Update total
-    total += num;
+Output
 
-    // Return same function
-    // so chaining can continue forever.
+5
+
+8
+
+12
+
+12
+
+*/
+
+/* ==========================================================
+        PART 2 - INFINITE CURRYING
+=============================================================
+
+Goal
+
+Allow unlimited chaining.
+
+Example
+
+curry(1)(2)(3)(4)(5)...
+
+There is no fixed number
+of function calls.
+
+-------------------------------------------------------------
+
+Question
+
+How does JavaScript know
+when to stop?
+
+Answer
+
+It DOESN'T.
+
+The function always returns itself.
+
+The chain ends only when JavaScript
+tries converting the function
+into a primitive value.
+
+Examples
+
+Number(...)
+
+Unary +
+
+Comparison
+
+Arithmetic
+
+String()
+
+=========================================================== */
+
+function curry(initialValue = 0) {
+
+  /*
+      Running total stored inside
+      a Closure.
+  */
+
+  let total = initialValue;
+
+  function curried(number) {
+
+    /*
+        Update total.
+    */
+
+    total += number;
+
+    /*
+        Return the SAME function.
+
+        Because we return ourselves,
+
+        chaining never ends.
+
+        curry(1)
+
+        ↓
+
+        (2)
+
+        ↓
+
+        (3)
+
+        ↓
+
+        (4)
+
+        ...
+    */
+
     return curried;
   }
 
-  // Called automatically during numeric conversion.
-  curried.valueOf = function () {
-    return total;
-  };
+  /*
+      Modern JavaScript primitive conversion.
 
-  // Called during string conversion.
-  curried.toString = function () {
-    return String(total);
+      JavaScript checks Symbol.toPrimitive first.
+
+      If unavailable,
+
+      it falls back to
+
+      valueOf()
+
+      then
+
+      toString()
+  */
+
+  curried[Symbol.toPrimitive] = function () {
+    return total;
   };
 
   return curried;
 }
 
-console.log(+curry(1)(2)(3));     // 6
-console.log(Number(curry(5)(5))); // 10
-
-
-
-// ---------------------------------------------------------
-// CURRYING - PART 3 (Infinite Currying with Empty Call)
-// ---------------------------------------------------------
-
 /*
-----------------------------------------------------------
-PART 3
+-------------------------------------------------------------
 
-Chain ends with an empty call.
+Execution
 
-curry(1)(2)(3)()
++curry(1)(2)(3)
 
-Instead of waiting for valueOf(),
-we explicitly stop the recursion
-when no argument is passed.
-----------------------------------------------------------
+↓
+
+JavaScript needs a Number
+
+↓
+
+Calls Symbol.toPrimitive()
+
+↓
+
+Returns total
+
+↓
+
+6
+
+-------------------------------------------------------------
 */
 
-function curry(total = 0) {
+console.log(+curry(1)(2)(3));
 
-  // Every recursive call creates a NEW closure
-  // containing the updated total.
-  return function curried(num) {
+console.log(Number(curry(5)(5)));
 
-    // Empty call means stop recursion.
-    if (num === undefined) {
-      return total;
-    }
-
-    // Return a NEW curried function
-    // with updated total.
-    //
-    // Example:
-    //
-    // curry(1)
-    // -> curry(3)
-    // -> curry(6)
-    //
-    return curry(total + num);
-  };
-}
-
-console.log(curry(1)(2)(3)()); // 6
-
-
-// ---------------------------------------------------------
-// CURRYING - PART 4 (GENERIC CURRY)
-// ---------------------------------------------------------
+console.log(curry(10)(20) + 5);
 
 /*
-----------------------------------------------------------
-PART 4
 
-Generic Curry
+Output
 
-Turns ANY function into a curried version.
+6
+
+10
+
+35
+
+*/
+// Symbol.toPrimitive
+
+// ↓
+
+// valueOf()
+
+// ↓
+
+// toString()
+// Using Symbol.toPrimitive is the modern ES6 approach and is preferred over overriding only valueOf().
+
+/* ==========================================================
+        PART 3 - INFINITE CURRYING (EMPTY CALL)
+=============================================================
+
+Definition
+----------
+
+Instead of relying on JavaScript's implicit primitive
+conversion (Symbol.toPrimitive/valueOf),
+
+the caller explicitly ends the chain by making
+an empty function call.
 
 Example
 
-sum(a,b,c,d)
+curry(1)(2)(3)()
 
-becomes
+↓
+
+6
+
+-------------------------------------------------------------
+
+How it works
+
+Every function call creates a NEW closure
+containing the updated total.
+
+Unlike Part 2, we DO NOT return the same function.
+
+Instead, we recursively create a NEW curried
+function with the latest accumulated value.
+
+-------------------------------------------------------------
+
+Execution
+
+curry(1)
+
+↓
+
+returns new closure(total = 1)
+
+↓
+
+(2)
+
+↓
+
+returns new closure(total = 3)
+
+↓
+
+(3)
+
+↓
+
+returns new closure(total = 6)
+
+↓
+
+()
+
+↓
+
+return 6
+
+=========================================================== */
+
+function curry(total = 0) {
+
+  /*
+      Return a function that remembers
+      the current accumulated value.
+  */
+
+  return function curried(number) {
+
+    /*
+        Empty function call.
+
+        No argument means
+
+        "Stop collecting values."
+
+        Return final answer.
+    */
+
+    if (number === undefined) {
+      return total;
+    }
+
+    /*
+        Create a NEW closure.
+
+        Each recursive call stores
+
+        updated total
+
+        independently.
+
+        Example
+
+        curry(1)
+
+        ↓
+
+        curry(3)
+
+        ↓
+
+        curry(6)
+    */
+
+    return curry(total + number);
+  };
+}
+
+/* ---------------------------------------------------------
+
+Example
+
+--------------------------------------------------------- */
+
+console.log(curry(1)(2)(3)());
+
+/*
+
+Output
+
+6
+
+*/
+
+// Difference from Part 2
+
+// Part 2
+
+// Returns SAME function
+
+// Part 3
+
+// Returns NEW function every call
+
+
+/* ==========================================================
+        PART 4 - GENERIC CURRY
+=============================================================
+
+Definition
+----------
+
+Convert ANY normal function into
+its curried version.
+
+Normal
+
+sum(1,2,3,4)
+
+↓
+
+Curried
 
 sum(1)(2)(3)(4)
 
-The function executes only after
-all required arguments have been collected.
+-------------------------------------------------------------
 
-How do we know?
+Question
+
+How do we know when to execute
+the original function?
+
+Answer
 
 fn.length
 
-returns the number of declared parameters.
-----------------------------------------------------------
-*/
+returns the number of declared
+parameters.
+
+Example
+
+function add(a,b,c){}
+
+↓
+
+add.length
+
+↓
+
+3
+
+Once we collect 3 arguments,
+
+execute add().
+
+=========================================================== */
 
 function curry(fn) {
 
+  /*
+      curried()
+
+      keeps collecting arguments.
+
+      Once enough arguments have
+      been collected,
+
+      execute original function.
+  */
+
   function curried(...args) {
 
-    // args contains every argument collected so far.
+    /*
+        Have we collected enough
+        arguments?
 
-    // If enough arguments have been collected,
-    // execute the original function.
+        fn.length tells us
+        how many parameters
+        original function expects.
+    */
+
     if (args.length >= fn.length) {
+
+      /*
+          Execute original function.
+
+          JavaScript ignores
+          extra arguments.
+
+          Example
+
+          fn(1,2,3,4)
+
+          if fn expects 3,
+
+          argument 4 is ignored.
+      */
+
       return fn(...args);
     }
 
-    // Otherwise return another function
-    // to collect remaining arguments.
+    /*
+        Not enough arguments.
+
+        Return another function
+        to collect remaining ones.
+    */
+
     return function (...nextArgs) {
 
-      // Merge old and new arguments.
+      /*
+          Merge previously collected
+          arguments
 
-      // Example
+          with
 
-      // args = [1]
-      // nextArgs = [2]
+          newly received arguments.
 
-      // becomes
+          Example
 
-      // [1,2]
+          args
+
+          [1]
+
+          nextArgs
+
+          [2,3]
+
+          becomes
+
+          [1,2,3]
+      */
 
       return curried(...args, ...nextArgs);
     };
@@ -8118,6 +9047,12 @@ function curry(fn) {
 
   return curried;
 }
+
+/* ---------------------------------------------------------
+
+Example
+
+--------------------------------------------------------- */
 
 function sum(a, b, c, d) {
   return a + b + c + d;
@@ -8127,68 +9062,18 @@ const curriedSum = curry(sum);
 
 console.log(curriedSum(1)(2)(3)(4));
 
+console.log(curriedSum(1,2)(3,4));
 
+console.log(curriedSum(1)(2,3,4));
 
-// ---------------------------------------------------------
-// CURRYING - PART 5 (Generic Curry with Multiple Arguments)
-// ---------------------------------------------------------
+console.log(curriedSum(1,2,3)(4));
+
+console.log(curriedSum(1,2,3,4));
 
 /*
-----------------------------------------------------------
-PART 5
 
-Supports every possible combination.
+All produce
 
-curried(1,2,3,4)
+10
 
-curried(1)(2,3)(4)
-
-curried(1)(2)(3)(4)
-
-Each invocation collects more arguments.
-
-Eventually the total number of collected
-arguments becomes equal to fn.length.
-
-At that point the original function executes.
-----------------------------------------------------------
 */
-
-function curry(fn) {
-
-  function curried(...args) {
-
-    // Have we collected enough arguments?
-    if (args.length >= fn.length) {
-
-      // Execute original function.
-
-      // Extra arguments are ignored because
-      // JavaScript ignores arguments beyond
-      // declared parameters.
-
-      return fn(...args);
-    }
-
-    // Need more arguments.
-
-    return (...nextArgs) => {
-
-      // Merge previously collected arguments
-      // with newly received arguments.
-
-      // Example
-
-      // args = [1,2]
-      // nextArgs = [3]
-
-      // becomes
-
-      // [1,2,3]
-
-      return curried(...args, ...nextArgs);
-    };
-  }
-
-  return curried;
-}
